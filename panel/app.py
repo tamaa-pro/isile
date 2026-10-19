@@ -492,6 +492,12 @@ def main():
         write_xray_conf(c)
         c.close()
         return
+    if cmd=="setadmin":
+        if os.environ.get("VPN_ADMIN_USER"):
+            put("admin_user",os.environ["VPN_ADMIN_USER"])
+        if os.environ.get("VPN_ADMIN_PASS"):
+            put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
+        return
     app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",PERMANENT_SESSION_LIFETIME=timedelta(hours=12),MAX_CONTENT_LENGTH=65536)
     with LOCK:
         c=db()
