@@ -1,53 +1,98 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 REPO="${VPNPANEL_REPO:-tamaa-pro/isile}"
 BRANCH="${VPNPANEL_BRANCH:-main}"
 APP=/opt/vpnpanel
 DATA=/var/lib/vpnpanel
-[ "$(id -u)" -eq 0 ] || { echo "Run as root"; exit 1; }
+LOG=/var/log/isile-install.log
+STEP="starting"
+FAILED_CMD=""
+die(){
+echo
+echo "=================================================="
+echo "  INSTALLATION FAILED"
+echo "=================================================="
+echo " Step   : $STEP"
+echo " Reason : $1"
+if [ -s "$LOG" ]; then
+echo " Last log lines ($LOG):"
+tail -n 12 "$LOG" | sed 's/^/   /'
+fi
+echo " Fix the issue, then run the install command again."
+exit 1
+}
+on_err(){
+local code=$?
+trap - ERR
+die "command failed (exit $code): ${FAILED_CMD:-$2} [line $1]"
+}
+trap 'on_err $LINENO "$BASH_COMMAND"' ERR
+L(){
+echo "+ $*" >>"$LOG"
+if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
+}
+[ "$(id -u)" -eq 0 ] || die "run this script as root"
+: > "$LOG"
 . /etc/os-release
-[ "$ID" = "ubuntu" ] || { echo "Ubuntu only"; exit 1; }
+[ "$ID" = "ubuntu" ] || die "Ubuntu only (found: $ID)"
+STEP="reading settings"
 read -rp "Domain (A record must point to this server): " DOMAIN </dev/tty
 DOMAIN="$(echo "$DOMAIN" | tr 'A-Z' 'a-z' | tr -d ' ')"
-[[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || { echo "Invalid domain"; exit 1; }
+[[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid domain: $DOMAIN"
 read -rp "Email for certificate notices (optional): " EMAIL </dev/tty
 read -rp "Admin username: " ADMIN_USER </dev/tty
-[[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || { echo "Username: 3-32 chars of A-Za-z0-9_.-"; exit 1; }
+[[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "username must be 3-32 chars of A-Za-z0-9_.-"
 read -rsp "Admin password (min 10 chars): " ADMIN_PASS </dev/tty; echo
 read -rsp "Confirm password: " ADMIN_PASS2 </dev/tty; echo
-[ "$ADMIN_PASS" = "$ADMIN_PASS2" ] || { echo "Passwords do not match"; exit 1; }
-[ "${#ADMIN_PASS}" -ge 10 ] || { echo "Password too short"; exit 1; }
+[ "$ADMIN_PASS" = "$ADMIN_PASS2" ] || die "passwords do not match"
+[ "${#ADMIN_PASS}" -ge 10 ] || die "password is shorter than 10 characters"
+STEP="checking DNS"
 SERVER_IP="$(curl -fsS4 --max-time 8 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
 DOM_IP="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}' || true)"
 if [ -n "$SERVER_IP" ] && [ "$SERVER_IP" != "$DOM_IP" ]; then
 echo "Warning: $DOMAIN resolves to '${DOM_IP:-nothing}' but this server is $SERVER_IP"
 read -rp "Continue anyway? [y/N]: " YN </dev/tty
-[[ "$YN" =~ ^[Yy]$ ]] || exit 1
+[[ "$YN" =~ ^[Yy]$ ]] || die "domain does not point to this server"
 fi
-apt-get update -y
-apt-get install -y nginx certbot python3 python3-venv python3-pip curl unzip nftables ufw openssl ca-certificates
+STEP="installing packages"
+echo "[1/8] Installing packages"
+L apt-get update -y
+L apt-get install -y nginx certbot python3 python3-venv python3-pip curl unzip nftables ufw openssl ca-certificates
+STEP="creating users and directories"
 getent group vpnusers >/dev/null || groupadd vpnusers
 id xray >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin xray
 install -d -m755 "$APP" /usr/local/etc/xray /var/www/certbot
 install -d -m700 "$DATA"
-curl -fsSL "https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH" | tar -xz -C "$APP" --strip-components=1
-python3 -m venv "$APP/venv"
-"$APP/venv/bin/pip" install -q --no-cache-dir -r "$APP/panel/requirements.txt"
-case "$(uname -m)" in x86_64) XA=64;; aarch64) XA=arm64-v8a;; *) echo "Unsupported architecture"; exit 1;; esac
+STEP="downloading panel files"
+echo "[2/8] Downloading panel files"
 TMP="$(mktemp -d)"
+curl -fsSL -o "$TMP/repo.tgz" "https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH" || die "cannot download github.com/$REPO (branch $BRANCH): check that the repository is public and the branch name is right"
+tar -xz -C "$APP" --strip-components=1 -f "$TMP/repo.tgz" || die "downloaded archive is invalid"
+[ -f "$APP/panel/app.py" ] || die "panel/app.py is missing in the repository"
+[ -f "$APP/panel/isile.sh" ] || die "panel/isile.sh is missing in the repository"
+STEP="creating python environment"
+echo "[3/8] Installing Python libraries"
+L python3 -m venv "$APP/venv"
+L "$APP/venv/bin/pip" install -q --no-cache-dir -r "$APP/panel/requirements.txt"
+STEP="installing Xray"
+echo "[4/8] Installing Xray"
+case "$(uname -m)" in x86_64) XA=64;; aarch64) XA=arm64-v8a;; *) die "unsupported architecture $(uname -m)";; esac
 XU="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-$XA.zip"
-curl -fsSL -o "$TMP/x.zip" "$XU"
-curl -fsSL -o "$TMP/x.dgst" "$XU.dgst"
-EXP="$(grep -i 'sha2-256\|sha256' "$TMP/x.dgst" | grep -oE '[0-9a-fA-F]{64}' | head -1 | tr 'A-F' 'a-f')"
+curl -fsSL -o "$TMP/x.zip" "$XU" || die "cannot download Xray"
+curl -fsSL -o "$TMP/x.dgst" "$XU.dgst" || die "cannot download Xray checksum"
+EXP="$(grep -i 'sha2-256\|sha256' "$TMP/x.dgst" | grep -oE '[0-9a-fA-F]{64}' | head -1 | tr 'A-F' 'a-f' || true)"
 ACT="$(sha256sum "$TMP/x.zip" | cut -d' ' -f1)"
-[ -n "$EXP" ] && [ "$EXP" = "$ACT" ] || { echo "Xray checksum mismatch"; exit 1; }
-unzip -oq "$TMP/x.zip" -d "$TMP/x"
+[ -n "$EXP" ] && [ "$EXP" = "$ACT" ] || die "Xray checksum mismatch"
+L unzip -oq "$TMP/x.zip" -d "$TMP/x"
 install -m755 "$TMP/x/xray" /usr/local/bin/xray
 install -d /usr/local/share/xray
 install -m644 "$TMP/x/geoip.dat" "$TMP/x/geosite.dat" /usr/local/share/xray/
 rm -rf "$TMP"
-SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
+STEP="configuring SSH"
+echo "[5/8] Configuring SSH"
+mkdir -p /run/sshd
+SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)"
 SSH_PORT="${SSH_PORT:-22}"
 SSHD_CONF=/etc/ssh/sshd_config.d/99-vpnpanel.conf
 cat > "$SSHD_CONF" <<EOF
@@ -65,11 +110,13 @@ ClientAliveInterval 60
 ClientAliveCountMax 3
 ForceCommand /usr/sbin/nologin
 EOF
-if ! sshd -t 2>/dev/null; then
+if ! sshd -t >>"$LOG" 2>&1; then
 sed -i '/PerSourcePenaltyExemptList/d' "$SSHD_CONF"
-sshd -t || { rm -f "$SSHD_CONF"; echo "sshd config invalid"; exit 1; }
+sshd -t >>"$LOG" 2>&1 || { rm -f "$SSHD_CONF"; die "sshd rejected the generated configuration"; }
 fi
-systemctl reload ssh 2>/dev/null || true
+systemctl reload ssh >>"$LOG" 2>&1 || true
+STEP="issuing TLS certificate"
+echo "[6/8] Issuing TLS certificate"
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/vpnpanel.conf <<EOF
 server {
@@ -81,17 +128,19 @@ location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
 location / { return 404; }
 }
 EOF
-nginx -t
-systemctl enable nginx
-systemctl restart nginx
+L nginx -t || die "nginx configuration test failed"
+L systemctl enable nginx
+L systemctl restart nginx || die "nginx failed to start (is another service using port 80?)"
 CB=(certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos --keep-until-expiring)
 if [ -n "$EMAIL" ]; then CB+=(-m "$EMAIL"); else CB+=(--register-unsafely-without-email); fi
-certbot "${CB[@]}"
-[ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] || { echo "Certificate was not issued"; exit 1; }
+L certbot "${CB[@]}" || die "certificate issuance failed (check the DNS A record and that port 80 is open in the cloud firewall)"
+[ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] || die "certificate file was not created"
 install -d /etc/letsencrypt/renewal-hooks/deploy
 printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 chmod 755 /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
-systemctl enable --now certbot.timer 2>/dev/null || true
+systemctl enable --now certbot.timer >>"$LOG" 2>&1 || true
+STEP="creating services"
+echo "[7/8] Creating services"
 cat > /etc/systemd/system/xray.service <<EOF
 [Unit]
 Description=Xray
@@ -144,8 +193,9 @@ ProtectHome=true
 [Install]
 WantedBy=multi-user.target
 EOF
-VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" "$APP/venv/bin/python" "$APP/panel/app.py" setup
+VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
 chmod 600 "$DATA/panel.db"
+install -m755 "$APP/panel/isile.sh" /usr/local/bin/isile
 WS='proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_read_timeout 1d; proxy_send_timeout 1d; proxy_buffering off;'
 SSL="ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem; ssl_protocols TLSv1.2 TLSv1.3; ssl_session_cache shared:vpnssl:10m; ssl_session_timeout 1d; ssl_session_tickets off;"
 SSHWS='if ($http_upgrade = "") { return 404; } limit_req zone=vpnws burst=40 nodelay; limit_conn vpnconn 100; proxy_pass http://127.0.0.1:10022;'
@@ -187,17 +237,53 @@ location = /login { limit_req zone=vpnlogin burst=10 nodelay; proxy_pass http://
 location / { proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-Proto https; }
 }
 EOF
-nginx -t
-ufw allow "$SSH_PORT/tcp"
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw allow 2080/tcp
-ufw --force enable
-systemctl daemon-reload
-systemctl enable --now vpnpanel vpnbridge
+L nginx -t || die "nginx configuration test failed"
+STEP="starting services and firewall"
+echo "[8/8] Starting services"
+L ufw allow "$SSH_PORT/tcp"
+L ufw allow 80/tcp
+L ufw allow 443/tcp
+L ufw allow 2080/tcp
+L ufw --force enable
+L systemctl daemon-reload
+L systemctl enable --now vpnpanel vpnbridge
 sleep 3
-systemctl enable xray
-systemctl restart xray
-systemctl reload nginx
-echo "Panel: https://$DOMAIN:2080"
-echo "SSH WS: $DOMAIN:80 and $DOMAIN:443 | VLESS path /vless | Trojan path /trojan"
+L systemctl enable xray
+L systemctl restart xray
+L systemctl reload nginx
+STEP="verifying services"
+for s in vpnpanel vpnbridge xray nginx; do
+ok=0
+for i in $(seq 1 20); do
+if systemctl is-active --quiet "$s"; then ok=1; break; fi
+sleep 1
+done
+if [ "$ok" != 1 ]; then
+journalctl -u "$s" -n 12 --no-pager >>"$LOG" 2>&1 || true
+die "service $s is not running"
+fi
+done
+CODE=000
+for i in $(seq 1 20); do
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1:2080/login || true)"
+[ "$CODE" = 200 ] && break
+sleep 1
+done
+if [ "$CODE" != 200 ]; then
+journalctl -u vpnpanel -n 12 --no-pager >>"$LOG" 2>&1 || true
+die "the panel did not answer on port 2080 (HTTP $CODE)"
+fi
+echo
+echo "=================================================="
+echo "  isile panel installed successfully"
+echo "=================================================="
+echo " Panel URL : https://$DOMAIN:2080"
+echo " Username  : $ADMIN_USER"
+echo " Password  : $ADMIN_PASS"
+echo "--------------------------------------------------"
+echo " Open ports 80, 443, 2080 and your SSH port in the cloud firewall."
+echo " Type  isile  to open the management menu:"
+echo "   1) Edit admin credentials"
+echo "   2) Show panel info"
+echo "   3) Uninstall panel completely"
+echo "=================================================="
