@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="csrf" content="{{ csrf }}">
+<meta name="domain" content="{{ domain }}">
+<title>لوحة VPN</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header>
+<h1>لوحة VPN</h1>
+<div class="row">
+<button class="btn" id="pw">كلمة المرور</button>
+<button class="btn" id="out">خروج</button>
+</div>
+</header>
+<main>
+<section id="stats" class="cards"></section>
+<section class="bar-tools">
+<input id="q" placeholder="بحث بالاسم أو الملاحظة">
+<select id="pf">
+<option value="">كل البروتوكولات</option>
+<option value="ssh">SSH + WebSocket</option>
+<option value="vless">VLESS</option>
+<option value="trojan">Trojan</option>
+</select>
+<select id="sf">
+<option value="">كل الحالات</option>
+<option value="active">نشط</option>
+<option value="disabled">معطّل</option>
+<option value="expired">منتهي</option>
+<option value="limit">تجاوز الحد</option>
+</select>
+<button class="btn pri" id="add">+ حساب جديد</button>
+</section>
+<div class="wrap">
+<table>
+<thead>
+<tr><th>الاسم</th><th>البروتوكول</th><th>الحالة</th><th>الاستهلاك</th><th>الصلاحية</th><th>ملاحظة</th><th>إجراءات</th></tr>
+</thead>
+<tbody id="rows"></tbody>
+</table>
+</div>
+</main>
+</body>
+</html>

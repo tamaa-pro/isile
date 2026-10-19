@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>تسجيل الدخول</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="center">
+<form class="box" method="post" action="/login" autocomplete="off">
+<h2>لوحة التحكم</h2>
+{% if err %}<div class="err">{{ err }}</div>{% endif %}
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label class="f"><span>اسم المشرف</span><input name="username" required autofocus></label>
+<label class="f"><span>كلمة المرور</span><input name="password" type="password" required></label>
+<button class="btn pri" type="submit">دخول</button>
+</form>
+</body>
+</html>
