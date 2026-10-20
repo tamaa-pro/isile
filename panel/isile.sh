@@ -13,11 +13,13 @@ u="$(dbget admin_user)"
 echo "=================================================="
 echo "  isile panel info"
 echo "=================================================="
+echo " Version   : $(cat "$APP/panel/VERSION" 2>/dev/null)"
 echo " Panel URL : https://$d:2080"
 echo " Username  : $u"
 echo " Password  : (stored hashed, use option 1 to set a new one)"
 echo " Domain    : $d"
-echo " Ports     : 80 (SSH WS) | 443 (SSH WS TLS, VLESS /vless, Trojan /trojan) | 2080 (panel)"
+echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel)"
+echo " Paths     : /vless /vmess /trojan (any other path = SSH WebSocket)"
 echo " Services  :"
 for s in vpnpanel vpnbridge xray nginx; do
 printf '   %-10s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null)"
@@ -41,6 +43,14 @@ VPN_ADMIN_USER="$nu" VPN_ADMIN_PASS="$np" "$PY" "$APP/panel/app.py" setadmin || 
 echo "Admin credentials updated."
 echo " Username : $(dbget admin_user)"
 [ -z "$np" ] || echo " Password : $np"
+}
+update(){
+local r b
+r="tamaa-pro/isile"
+b="main"
+[ -f "$APP/.repo" ] && read -r r b <"$APP/.repo"
+echo "Updating from github.com/$r ($b) ..."
+bash <(curl -fsSL "https://raw.githubusercontent.com/$r/$b/install.sh") --update
 }
 uninstall(){
 local ans d n
@@ -87,12 +97,14 @@ echo "=================================================="
 echo "  1) Edit admin credentials"
 echo "  2) Show panel info"
 echo "  3) Uninstall panel completely"
+echo "  4) Update to the latest version"
 echo "  0) Exit"
 read -rp "> " c
 case "$c" in
 1) edit_admin;;
 2) show_info;;
 3) uninstall && exit 0;;
+4) update; exit 0;;
 0) exit 0;;
 *) echo "Invalid choice";;
 esac
@@ -102,6 +114,7 @@ case "${1:-}" in
 1) edit_admin;;
 2) show_info;;
 3) uninstall;;
+4) update;;
 *) menu;;
 esac
 exit 0
