@@ -4,17 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>تسجيل الدخول</title>
+<title>VPN</title>
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/fa/css/all.min.css">
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/i18n.js" defer></script>
+<script src="/static/login.js" defer></script>
 </head>
 <body class="center">
-<form class="box" method="post" action="/login" autocomplete="off">
-<h2>لوحة التحكم</h2>
-{% if err %}<div class="err">{{ err }}</div>{% endif %}
+<form class="login" method="post" action="/login" autocomplete="off">
+<div class="logo big"><i class="fa-solid fa-shield-halved"></i></div>
+<h2>isile <small>v{{ version }}</small></h2>
+<div class="err" data-err="{{ err }}" hidden></div>
 <input type="hidden" name="csrf" value="{{ csrf }}">
-<label class="f"><span>اسم المشرف</span><input name="username" required autofocus></label>
-<label class="f"><span>كلمة المرور</span><input name="password" type="password" required></label>
-<button class="btn pri" type="submit">دخول</button>
+<label class="f"><span data-i18n="login_user"></span><input name="username" required autofocus></label>
+<label class="f"><span data-i18n="login_pass"></span><input name="password" type="password" required></label>
+<button class="btn pri block" type="submit"><i class="fa-solid fa-right-to-bracket"></i> <span data-i18n="login_btn"></span></button>
 </form>
 </body>
 </html>

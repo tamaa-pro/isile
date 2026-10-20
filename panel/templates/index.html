@@ -6,45 +6,20 @@
 <meta name="robots" content="noindex,nofollow">
 <meta name="csrf" content="{{ csrf }}">
 <meta name="domain" content="{{ domain }}">
-<title>لوحة VPN</title>
+<meta name="version" content="{{ version }}">
+<title>VPN</title>
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/fa/css/all.min.css">
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/i18n.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
-<header>
-<h1>لوحة VPN</h1>
-<div class="row">
-<button class="btn" id="pw">كلمة المرور</button>
-<button class="btn" id="out">خروج</button>
-</div>
+<header class="top">
+<a class="brand" href="#/dashboard"><span class="logo"><i class="fa-solid fa-shield-halved"></i></span><b>isile</b><small>v{{ version }}</small></a>
+<nav id="nav"></nav>
+<div id="tools" class="tools"></div>
 </header>
-<main>
-<section id="stats" class="cards"></section>
-<section class="bar-tools">
-<input id="q" placeholder="بحث بالاسم أو الملاحظة">
-<select id="pf">
-<option value="">كل البروتوكولات</option>
-<option value="ssh">SSH + WebSocket</option>
-<option value="vless">VLESS</option>
-<option value="trojan">Trojan</option>
-</select>
-<select id="sf">
-<option value="">كل الحالات</option>
-<option value="active">نشط</option>
-<option value="disabled">معطّل</option>
-<option value="expired">منتهي</option>
-<option value="limit">تجاوز الحد</option>
-</select>
-<button class="btn pri" id="add">+ حساب جديد</button>
-</section>
-<div class="wrap">
-<table>
-<thead>
-<tr><th>الاسم</th><th>البروتوكول</th><th>الحالة</th><th>الاستهلاك</th><th>الصلاحية</th><th>ملاحظة</th><th>إجراءات</th></tr>
-</thead>
-<tbody id="rows"></tbody>
-</table>
-</div>
-</main>
+<main id="view"></main>
 </body>
 </html>
