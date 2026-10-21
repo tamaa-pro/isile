@@ -1,11 +1,16 @@
-import os,sys,re,json,time,uuid,hmac,base64,secrets,shutil,sqlite3,ipaddress,functools,threading,traceback,subprocess
-from datetime import timedelta
+import os,sys,re,json,time,uuid,hmac,base64,socket,secrets,shutil,sqlite3,tempfile,functools,threading,traceback,subprocess
+from datetime import timedelta,datetime,timezone
+from shlex import quote as shq
 from urllib.parse import quote
 from flask import Flask,request,session,jsonify,render_template,redirect
 from werkzeug.security import generate_password_hash,check_password_hash
 BASE=os.path.dirname(os.path.abspath(__file__))
+APPDIR=os.path.dirname(BASE)
 DATA="/var/lib/vpnpanel"
 DBP=DATA+"/panel.db"
+JOBF=DATA+"/job.json"
+RCF=DATA+"/job.rc"
+LOGF="/var/log/isile-install.log"
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -19,12 +24,16 @@ PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vles
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
 UUID_RE=re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+DOMAIN_RE=re.compile(r"^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$")
+EMAIL_RE=re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 ALNUM="abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 LOCK=threading.RLock()
 FAILS={}
-ONLINE={}
-SEEN={}
 CPU={}
+ACTIVE={}
+ACTIVE_MIN=1024
+ACTIVE_TTL=25
+RUN=None
 try:
     with open(BASE+"/VERSION") as f:
         VERSION=f.read().strip()
@@ -43,8 +52,6 @@ CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,se
     cols={r["name"] for r in c.execute("PRAGMA table_info(accounts)")}
     if "tls" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN tls TEXT NOT NULL DEFAULT 'tls'")
-    if "maxdev" not in cols:
-        c.execute("ALTER TABLE accounts ADD COLUMN maxdev INTEGER NOT NULL DEFAULT 0")
     c.execute("UPDATE accounts SET tls='both' WHERE proto='ssh' AND tls<>'both'")
     c.commit()
     c.close()
@@ -56,11 +63,22 @@ def get(k,d=None):
     r=c.execute("SELECT v FROM settings WHERE k=?",(k,)).fetchone()
     c.close()
     return r["v"] if r else d
-def put(k,v):
+def gets(*keys):
     c=db()
-    c.execute("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",(k,v))
+    r={x["k"]:x["v"] for x in c.execute("SELECT k,v FROM settings WHERE k IN (%s)"%",".join("?"*len(keys)),keys)}
+    c.close()
+    return r
+def put(k,v):
+    puts({k:v})
+def puts(d):
+    c=db()
+    c.executemany("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",[(k,str(v)) for k,v in d.items()])
     c.commit()
     c.close()
+def host():
+    return get("domain","") or get("server_ip","")
+def tls_on():
+    return bool(get("domain",""))
 def sh(args,inp=None):
     return subprocess.run(args,input=inp,capture_output=True,text=True,timeout=40)
 def gen_pass():
@@ -108,8 +126,6 @@ def nft_apply(c):
     uids=[r["uid"] for r in c.execute("SELECT uid FROM accounts WHERE proto='ssh' AND uid IS NOT NULL")]
     rng="meta skuid >= %d meta skuid < %d"%(UID0,UID1)
     L=["table inet vpnacct","delete table inet vpnacct","table inet vpnacct {"]
-    L.append(" set blk4 { type ipv4_addr; flags timeout; }")
-    L.append(" set blk6 { type ipv6_addr; flags timeout; }")
     for u in uids:
         L.append(" counter cu%d { }"%u)
         L.append(" counter cd%d { }"%u)
@@ -123,8 +139,6 @@ def nft_apply(c):
     L.append(" }")
     L.append(" chain in {")
     L.append("  type filter hook input priority -150; policy accept;")
-    L.append("  ip saddr @blk4 tcp dport { 80, 443 } drop")
-    L.append("  ip6 saddr @blk6 tcp dport { 80, 443 } drop")
     for u in uids:
         L.append('  ct mark %d counter name "cd%d"'%(u,u))
     L.append(" }")
@@ -132,12 +146,6 @@ def nft_apply(c):
     r=sh(["nft","-f","-"],inp="\n".join(L)+"\n")
     if r.returncode:
         print("nft error:",r.stderr,file=sys.stderr)
-def block_ip(ip):
-    try:
-        a=ipaddress.ip_address(ip)
-    except ValueError:
-        return
-    sh(["nft","add","element","inet","vpnacct","blk6" if a.version==6 else "blk4","{ %s timeout 5m }"%a])
 def harvest_nft():
     r=sh(["nft","-j","reset","counters","table","inet","vpnacct"])
     out={}
@@ -178,12 +186,17 @@ def collect(c):
         x=harvest_xray()
         s=harvest_nft()
         um={r["uid"]:r["name"] for r in c.execute("SELECT name,uid FROM accounts WHERE uid IS NOT NULL")}
+        now=time.time()
         for n,(u,d) in x.items():
             c.execute("UPDATE accounts SET up=up+?,down=down+? WHERE name=?",(u,d,n))
+            if u+d>=ACTIVE_MIN:
+                ACTIVE[n]=now
         for uid,(u,d) in s.items():
             n=um.get(uid)
             if n:
                 c.execute("UPDATE accounts SET up=up+?,down=down+? WHERE name=?",(u,d,n))
+                if u+d>=ACTIVE_MIN:
+                    ACTIVE[n]=now
         c.commit()
 def client_of(r):
     if r["proto"]=="trojan":
@@ -216,24 +229,28 @@ def xray_conf(c):
                 st["decryption"]="none"
             inb.append({"tag":p+"-"+m,"listen":"127.0.0.1","port":PORTS[(p,m)],"protocol":p,"settings":st,"streamSettings":{"network":"ws","wsSettings":{"path":"/"+p}}})
     return {
-        "log":{"loglevel":"warning"},
+        "log":{"access":"none","loglevel":"warning"},
         "stats":{},
-        "api":{"tag":"api","services":["StatsService"]},
-        "policy":{"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True,"statsUserOnline":True}}},
+        "api":{"tag":"api","services":["StatsService","HandlerService"]},
+        "policy":{"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}}},
         "inbounds":inb,
         "outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}],
         "routing":{"domainStrategy":"IPIfNonMatch","rules":[
             {"type":"field","inboundTag":["api"],"outboundTag":"api"},
             {"type":"field","ip":["geoip:private"],"outboundTag":"block"}]}}
-def write_xray_conf(c):
-    txt=json.dumps(xray_conf(c),indent=1,sort_keys=True)
+def read_cfg():
     try:
         with open(XCONF) as f:
-            old=f.read()
+            return json.load(f)
+    except (OSError,ValueError):
+        return None
+def write_cfg_text(txt):
+    try:
+        with open(XCONF) as f:
+            if f.read()==txt:
+                return False
     except OSError:
-        old=None
-    if old==txt:
-        return False
+        pass
     os.makedirs(os.path.dirname(XCONF),exist_ok=True)
     tmp=XCONF+".tmp"
     with open(tmp,"w") as f:
@@ -242,15 +259,74 @@ def write_xray_conf(c):
     shutil.chown(tmp,"root","xray")
     os.replace(tmp,XCONF)
     return True
+def write_xray_conf(c):
+    return write_cfg_text(json.dumps(xray_conf(c),indent=1,sort_keys=True))
+def cfg_clients(cfg):
+    out={}
+    for ib in cfg.get("inbounds",[]):
+        cl=ib.get("settings",{}).get("clients")
+        if cl is not None:
+            out[ib["tag"]]={x["email"]:x for x in cl if not x["email"].startswith("placeholder-")}
+    return out
+def cfg_struct(cfg):
+    o=json.loads(json.dumps(cfg))
+    for ib in o.get("inbounds",[]):
+        if "clients" in ib.get("settings",{}):
+            ib["settings"]["clients"]=[]
+    return o
+def restart_xray(c):
+    if xray_running():
+        collect(c)
+    sh(["systemctl","restart","xray"])
+def hot(rm,add):
+    for tag,emails in rm.items():
+        r=sh([XBIN,"api","rmu","-s",XAPI,"-tag="+tag]+emails)
+        if r.returncode:
+            print("xray rmu failed:",r.stdout,r.stderr,file=sys.stderr)
+            return False
+    for tag,cl in add.items():
+        p=tag.split("-")[0]
+        st={"clients":cl}
+        if p=="vless":
+            st["decryption"]="none"
+        fd,path=tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd,"w") as f:
+            json.dump({"inbounds":[{"tag":tag,"protocol":p,"settings":st}]},f)
+        r=sh([XBIN,"api","adu","-s",XAPI,path])
+        os.unlink(path)
+        if r.returncode:
+            print("xray adu failed:",r.stdout,r.stderr,file=sys.stderr)
+            return False
+    return True
 def xray_sync(c):
+    global RUN
     with LOCK:
-        changed=write_xray_conf(c)
+        cfg=xray_conf(c)
+        old=read_cfg()
         run=xray_running()
-        if run and not changed:
+        want=cfg_clients(cfg)
+        if run and RUN is None and old is not None:
+            RUN=cfg_clients(old)
+        write_cfg_text(json.dumps(cfg,indent=1,sort_keys=True))
+        if not run or old is None or RUN is None or cfg_struct(old)!=cfg_struct(cfg):
+            restart_xray(c)
+            RUN=want
             return
-        if run:
-            collect(c)
-        sh(["systemctl","restart","xray"])
+        rm={}
+        add={}
+        for tag,w in want.items():
+            cur=RUN.get(tag,{})
+            for e,x in cur.items():
+                if w.get(e)!=x:
+                    rm.setdefault(tag,[]).append(e)
+            for e,x in w.items():
+                if cur.get(e)!=x:
+                    add.setdefault(tag,[]).append(x)
+        if not rm and not add:
+            return
+        if not hot(rm,add):
+            restart_xray(c)
+        RUN=want
 def reconcile(c):
     with LOCK:
         now=int(time.time())
@@ -264,76 +340,33 @@ def reconcile(c):
                 ssh_lock(r["name"],new!="active")
         c.commit()
         xray_sync(c)
-def ssh_sessions():
-    out={}
-    r=sh(["ps","-eo","user:32=,pid=,etimes=,comm="])
-    for l in r.stdout.splitlines():
-        p=l.split()
-        if len(p)>=4 and p[3].startswith("sshd") and p[0]!="root" and p[1].isdigit() and p[2].isdigit():
-            out.setdefault(p[0],[]).append((int(p[2]),int(p[1])))
-    return out
-def find_ips(o):
-    if isinstance(o,dict):
-        if isinstance(o.get("ips"),dict):
-            return o["ips"]
-        for v in o.values():
-            x=find_ips(v)
-            if x is not None:
-                return x
-    return None
-def v2_ips(name):
-    r=sh([XBIN,"api","statsonlineiplist","-s",XAPI,"-email="+name])
-    if r.returncode:
-        return []
-    try:
-        ips=find_ips(json.loads(r.stdout or "{}"))
-    except ValueError:
-        return []
-    return list(ips) if ips else []
-def v2_limit(name,ips,maxdev):
-    now=time.time()
-    seen=SEEN.setdefault(name,{})
-    for ip in list(seen):
-        if ip not in ips:
-            seen.pop(ip,None)
-    for ip in ips:
-        seen.setdefault(ip,now)
-    if maxdev and len(seen)>maxdev:
-        for ip in sorted(seen,key=lambda i:seen[i])[maxdev:]:
-            block_ip(ip)
-def update_online(c):
-    global ONLINE
-    rows=c.execute("SELECT name,proto,maxdev FROM accounts WHERE status='active'").fetchall()
-    ssh=ssh_sessions()
-    xr=xray_running()
-    on={}
-    for r in rows:
-        n=r["name"]
-        if r["proto"]=="ssh":
-            s=sorted(ssh.get(n,[]))
-            ex=len(s)-r["maxdev"] if r["maxdev"] else 0
-            if ex>0:
-                for et,pid in s[:ex]:
-                    sh(["kill","-KILL",str(pid)])
-                s=s[ex:]
-            on[n]=len(s)
-        elif xr:
-            ips=v2_ips(n)
-            on[n]=len(ips)
-            v2_limit(n,ips,r["maxdev"])
-    ONLINE=on
+def track_traffic():
+    rx,tx=net_totals()
+    s=gets("month","m_rx","m_tx","m_off","last_rx","last_tx")
+    cur=time.strftime("%Y-%m",time.gmtime())
+    m_rx=int(s.get("m_rx",0))
+    m_tx=int(s.get("m_tx",0))
+    off=int(s.get("m_off",0))
+    if s.get("month")!=cur:
+        m_rx=m_tx=off=0
+    if "last_rx" in s:
+        lr=int(s["last_rx"])
+        lt=int(s["last_tx"])
+        m_rx+=rx-lr if rx>=lr else rx
+        m_tx+=tx-lt if tx>=lt else tx
+    puts({"month":cur,"m_rx":m_rx,"m_tx":m_tx,"m_off":off,"last_rx":rx,"last_tx":tx})
 def worker():
     n=0
     while True:
         time.sleep(10)
         n+=1
         try:
+            track_traffic()
             with LOCK:
                 c=db()
                 try:
-                    update_online(c)
+                    collect(c)
                     if n%3==0:
-                        collect(c)
                         reconcile(c)
                 finally:
                     c.close()
@@ -443,6 +476,14 @@ def net_totals():
                 rx+=int(p[0])
                 tx+=int(p[8])
     return rx,tx
+def month_info():
+    s=gets("m_rx","m_tx","m_off","cap_gb","cap_basis")
+    rx=int(s.get("m_rx",0))
+    tx=int(s.get("m_tx",0))
+    off=int(s.get("m_off",0))
+    basis=s.get("cap_basis","total")
+    used=max(0,(tx if basis=="out" else rx+tx)+off)
+    return {"month_rx":rx,"month_tx":tx,"month_used":used,"cap_gb":float(s.get("cap_gb",0) or 0),"cap_basis":basis}
 @app.get("/api/stats")
 @auth
 def stats():
@@ -458,15 +499,153 @@ def stats():
     with open("/proc/uptime") as f:
         up=float(f.read().split()[0])
     rx,tx=net_totals()
-    return jsonify(version=VERSION,cpu=cpu_pct(),cores=os.cpu_count() or 1,load=list(os.getloadavg()),mem_total=mem.get("MemTotal",0),mem_used=mem.get("MemTotal",0)-mem.get("MemAvailable",0),disk_total=du.total,disk_used=du.used,uptime=up,net_rx=rx,net_tx=tx,ts=time.time(),services=sv,domain=get("domain",""))
+    o=dict(version=VERSION,cpu=cpu_pct(),cores=os.cpu_count() or 1,load=list(os.getloadavg()),mem_total=mem.get("MemTotal",0),mem_used=mem.get("MemTotal",0)-mem.get("MemAvailable",0),disk_total=du.total,disk_used=du.used,uptime=up,net_rx=rx,net_tx=tx,ts=time.time(),services=sv,domain=get("domain",""),host=host(),tls_on=tls_on())
+    o.update(month_info())
+    return jsonify(o)
+def cert_info(dom):
+    p="/etc/letsencrypt/live/%s/fullchain.pem"%dom
+    if not dom or not os.path.exists(p):
+        return None
+    r=sh(["openssl","x509","-enddate","-noout","-in",p])
+    m=re.search(r"notAfter=(.+)",r.stdout)
+    if not m:
+        return None
+    try:
+        e=datetime.strptime(m.group(1).strip(),"%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return {"expires":int(e.timestamp()),"days_left":int((e-datetime.now(timezone.utc)).total_seconds()//86400)}
+def dns_of(dom):
+    try:
+        return sorted({a[4][0] for a in socket.getaddrinfo(dom,None,socket.AF_INET)})
+    except (socket.gaierror,UnicodeError):
+        return []
+@app.get("/api/settings")
+@auth
+def settings_get():
+    s=gets("cap_gb","cap_basis")
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on()}
+    o.update(month_info())
+    return jsonify(o)
+@app.post("/api/settings")
+@auth
+def settings_set():
+    d=request.get_json(silent=True) or {}
+    upd={}
+    try:
+        if d.get("cap_gb") not in (None,""):
+            v=float(d["cap_gb"])
+            if not 0<=v<=10000000:
+                return err("bad_values")
+            upd["cap_gb"]=v
+        if d.get("used_gb") not in (None,""):
+            v=float(d["used_gb"])
+            if not 0<=v<=10000000:
+                return err("bad_values")
+            m=month_info()
+            basis=d.get("cap_basis") if d.get("cap_basis") in ("out","total") else m["cap_basis"]
+            base=m["month_tx"] if basis=="out" else m["month_rx"]+m["month_tx"]
+            upd["m_off"]=int(v*GB)-base
+    except (TypeError,ValueError):
+        return err("bad_values")
+    if d.get("cap_basis") in ("out","total"):
+        upd["cap_basis"]=d["cap_basis"]
+    if d.get("reset"):
+        upd.update({"m_rx":0,"m_tx":0,"m_off":0})
+    if upd:
+        puts(upd)
+    return jsonify(ok=True)
+@app.get("/api/domain")
+@auth
+def domain_get():
+    cur=get("domain","")
+    cand=str(request.args.get("d","")).strip().lower() or cur
+    if cand and not DOMAIN_RE.match(cand):
+        return err("bad_domain")
+    ip=get("server_ip","")
+    dns=dns_of(cand) if cand else []
+    return jsonify(domain=cur,candidate=cand,server_ip=ip,dns=dns,match=bool(ip and ip in dns),cert=cert_info(cand))
+def start_job(kind,cmd):
+    if os.path.exists(RCF):
+        os.unlink(RCF)
+    with open(JOBF,"w") as f:
+        json.dump({"kind":kind,"started":time.time()},f)
+    r=sh(["systemd-run","--no-block","--collector","bash","-c","%s; echo $? > %s"%(cmd,RCF)])
+    if r.returncode:
+        os.unlink(JOBF)
+        return False
+    return True
+@app.post("/api/domain")
+@auth
+def domain_set():
+    d=request.get_json(silent=True) or {}
+    dom=str(d.get("domain","")).strip().lower()
+    email=str(d.get("email","")).strip()
+    if not DOMAIN_RE.match(dom):
+        return err("bad_domain")
+    if email and not EMAIL_RE.match(email):
+        return err("bad_email")
+    if not start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email))):
+        return err("system")
+    return jsonify(ok=True)
+@app.post("/api/system/restart")
+@auth
+def sys_restart():
+    if not start_job("restart","sleep 1; systemctl restart xray vpnbridge nginx; systemctl restart vpnpanel"):
+        return err("system")
+    return jsonify(ok=True)
+@app.post("/api/system/update")
+@auth
+def sys_update():
+    if not start_job("update","/usr/local/bin/isile 4"):
+        return err("system")
+    return jsonify(ok=True)
+@app.post("/api/system/uninstall")
+@auth
+def sys_uninstall():
+    d=request.get_json(silent=True) or {}
+    if not check_password_hash(get("admin_hash",""),str(d.get("password",""))):
+        return err("wrong_password")
+    if not start_job("uninstall","/usr/local/bin/isile 3 --yes"):
+        return err("system")
+    return jsonify(ok=True)
+@app.get("/api/system/job")
+@auth
+def sys_job():
+    if not os.path.exists(JOBF):
+        return jsonify(state="none")
+    try:
+        with open(JOBF) as f:
+            j=json.load(f)
+    except (OSError,ValueError):
+        return jsonify(state="none")
+    if os.path.exists(RCF):
+        try:
+            with open(RCF) as f:
+                rc=int(f.read().strip() or 1)
+        except (OSError,ValueError):
+            rc=1
+        try:
+            with open(LOGF) as f:
+                tail="".join(f.readlines()[-14:])
+        except OSError:
+            tail=""
+        for p in (JOBF,RCF):
+            if os.path.exists(p):
+                os.unlink(p)
+        return jsonify(state="done",kind=j.get("kind"),rc=rc,log=tail)
+    if time.time()-j.get("started",0)>900:
+        os.unlink(JOBF)
+        return jsonify(state="none")
+    return jsonify(state="running",kind=j.get("kind"))
 @app.get("/api/accounts")
 @auth
 def lst():
     c=db()
     rows=[]
     for r in c.execute("SELECT * FROM accounts ORDER BY created DESC"):
-        o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls","maxdev")}
-        o["online"]=ONLINE.get(r["name"],0)
+        o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls")}
+        o["active"]=r["status"]=="active" and time.time()-ACTIVE.get(r["name"],0)<ACTIVE_TTL
         rows.append(o)
     c.close()
     return jsonify(rows)
@@ -481,18 +660,22 @@ def info(name):
     c.close()
     if not r:
         return err("not_found",404)
-    dom=get("domain","")
+    dom=host()
+    t_on=tls_on()
     s=r["secret"]
     n=r["name"]
     h=quote(n,safe="")
     items=[]
     p=r["proto"]
     if p=="ssh":
-        items=[{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2},{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2},{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+        items=[{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2},{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+        if t_on:
+            items.insert(0,{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
     else:
-        modes=MODES if r["tls"]=="both" else (r["tls"],)
-        for m in modes:
+        for m in (MODES if r["tls"]=="both" else (r["tls"],)):
             tls=m=="tls"
+            if tls and not t_on:
+                continue
             if p=="vmess":
                 v=vmess_link(n,s,dom,tls)
             elif p=="vless":
@@ -501,7 +684,7 @@ def info(name):
                 v="trojan://%s@%s:%d?security=%s&%stype=ws&host=%s&path=%%2Ftrojan#%s"%(quote(s,safe=""),dom,443 if tls else 80,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-80"))
             items.append({"k":"link_tls" if tls else "link_plain","value":v,"rows":4})
         items.append({"k":"pass" if p=="trojan" else "uuid","value":s,"rows":1})
-    return jsonify(items=items,online=ONLINE.get(n,0),maxdev=r["maxdev"],status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],expires=r["expires"],proto=p,tls=r["tls"])
+    return jsonify(items=items,active=r["status"]=="active" and time.time()-ACTIVE.get(n,0)<ACTIVE_TTL,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],expires=r["expires"],proto=p,tls=r["tls"],tls_on=t_on)
 def parse_common(d,creating):
     try:
         out={}
@@ -515,11 +698,6 @@ def parse_common(d,creating):
             if not 0<=q<=100000:
                 return None
             out["quota"]=int(q*GB)
-        if creating or d.get("maxdev") not in (None,""):
-            m=int(d.get("maxdev") or 0)
-            if not 0<=m<=100:
-                return None
-            out["maxdev"]=m
         return out
     except (TypeError,ValueError):
         return None
@@ -564,7 +742,7 @@ def create():
                 except RuntimeError as e:
                     return err("system",400,str(e))
             now=int(time.time())
-            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,maxdev) VALUES(?,?,?,?,?,?,?,?,'active',?,?)",(name,proto,sec,uid,now,now+pc["days"]*86400 if pc["days"] else 0,pc["quota"],note,tls,pc["maxdev"]))
+            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls) VALUES(?,?,?,?,?,?,?,?,'active',?)",(name,proto,sec,uid,now,now+pc["days"]*86400 if pc["days"] else 0,pc["quota"],note,tls))
             c.commit()
             if proto=="ssh":
                 collect(c)
@@ -606,8 +784,6 @@ def edit(name):
                 sets["expires"]=int(time.time())+pc["days"]*86400 if pc["days"] else 0
             if "quota" in pc:
                 sets["quota"]=pc["quota"]
-            if "maxdev" in pc:
-                sets["maxdev"]=pc["maxdev"]
             if d.get("tls") and r["proto"]!="ssh":
                 if d["tls"] not in ("tls","plain","both"):
                     return err("bad_values")
@@ -642,7 +818,6 @@ def delete(name):
                 ssh_del(name)
             c.execute("DELETE FROM accounts WHERE name=?",(name,))
             c.commit()
-            SEEN.pop(name,None)
             if r["proto"]=="ssh":
                 nft_apply(c)
             else:
@@ -656,7 +831,7 @@ def main():
     if cmd=="setup":
         put("admin_user",os.environ["VPN_ADMIN_USER"])
         put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
-        put("domain",os.environ["VPN_DOMAIN"])
+        puts({"domain":os.environ.get("VPN_DOMAIN",""),"server_ip":os.environ.get("VPN_SERVER_IP","")})
         c=db()
         write_xray_conf(c)
         c.close()
@@ -667,7 +842,10 @@ def main():
         if os.environ.get("VPN_ADMIN_PASS"):
             put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
         return
-    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",PERMANENT_SESSION_LIFETIME=timedelta(hours=12),MAX_CONTENT_LENGTH=65536)
+    if cmd=="setdomain":
+        put("domain",os.environ["VPN_DOMAIN"])
+        return
+    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",PERMANENT_SESSION_LIFETIME=timedelta(hours=12),MAX_CONTENT_LENGTH=65536)
     with LOCK:
         c=db()
         nft_apply(c)
