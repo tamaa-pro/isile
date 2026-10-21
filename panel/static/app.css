@@ -64,9 +64,7 @@ main.enter{animation:rise .35s ease}
 .svc{display:flex;gap:8px;flex-wrap:wrap}
 .muted{color:var(--mut)}
 .sm{font-size:12.5px}
-.sm-i{font-size:12px}
 .ltr{direction:ltr;unicode-bidi:plaintext;display:inline-block}
-.warn-t{color:var(--warn);font-weight:600}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 12px;border-radius:99px;font-size:13px;font-weight:600;background:var(--card2);border:1px solid var(--line)}
 .pill.ok{background:rgba(34,197,94,.14);color:var(--ok);border-color:rgba(34,197,94,.3)}
 .pill.bad{background:rgba(239,68,68,.14);color:var(--bad);border-color:rgba(239,68,68,.3)}
@@ -137,3 +135,38 @@ dialog::backdrop{background:rgba(5,8,20,.68);backdrop-filter:blur(3px)}
 .err{background:rgba(239,68,68,.14);color:var(--bad);border:1px solid rgba(239,68,68,.3);padding:9px 14px;border-radius:11px}
 [hidden]{display:none!important}
 @media(max-width:720px){.top{padding:8px 12px;gap:8px}.brand b,.brand small{display:none}#nav{margin-inline-start:4px}.nav-link span{display:none}.nav-link{padding:9px 12px}.two{grid-template-columns:1fr}.g2{grid-template-columns:1fr}main{padding:14px 10px 50px}.tile-v{font-size:22px}}
+.c9{background:linear-gradient(135deg,#f97316,#fb923c)}
+.tile.wide{margin-bottom:16px}
+.tile.wide .tw{display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.tile.wide .meter{height:11px}
+.meter.warnm i{background:linear-gradient(90deg,#f59e0b,#f97316)}
+.btn.dgr{background:linear-gradient(135deg,#dc2626,#f97316);border-color:transparent;color:#fff;box-shadow:0 6px 18px rgba(220,38,38,.3)}
+.ask{margin:0 0 14px;line-height:1.7}
+.dd{position:relative;display:inline-block;min-width:170px}
+.f .dd{display:block}
+.dd-b{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--inp);color:var(--tx);border:1px solid var(--line);border-radius:11px;padding:9px 12px;font:inherit;cursor:pointer;transition:.15s;text-align:start}
+.dd-b:hover,.dd.open .dd-b{border-color:var(--pri)}
+.dd.open .dd-b{box-shadow:0 0 0 3px rgba(99,102,241,.25)}
+.dd-c{font-size:12px;color:var(--mut);transition:transform .2s}
+.dd.open .dd-c{transform:rotate(180deg)}
+.dd-p{position:fixed;z-index:300;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:5px;box-shadow:0 18px 50px rgba(0,0,0,.45);max-height:300px;overflow:auto;animation:rise .15s ease}
+.dd-o{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:var(--tx);padding:9px 12px;border-radius:9px;font:inherit;cursor:pointer;text-align:start;transition:.12s}
+.dd-o span{flex:1}
+.dd-o:hover{background:rgba(99,102,241,.14)}
+.dd-o.on{background:rgba(99,102,241,.2);font-weight:600}
+.dd-k{color:var(--pri2);font-size:12px}
+.ovl{position:fixed;inset:0;z-index:500;background:rgba(5,8,20,.78);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:20px}
+.ovl-b{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px 34px;text-align:center;box-shadow:var(--shadow);max-width:420px}
+.ovl-i{font-size:34px;color:var(--pri2);margin-bottom:14px}
+.ovl-i.ok-i{color:var(--ok)}
+.ovl-t{font-size:16px;line-height:1.7}
+.srow{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:13px;background:var(--card2)}
+.srow-t{flex:1;min-width:0}
+.log{margin:8px 0 0;padding:12px;border-radius:11px;background:var(--inp);border:1px solid var(--line);font:12.5px/1.55 Consolas,"Courier New",monospace;white-space:pre-wrap;word-break:break-word;direction:ltr;text-align:left;max-height:300px;overflow:auto}
+.lang-fab{position:fixed;top:14px;inset-inline-end:14px;border:1px solid var(--line);background:var(--card)}
+.f .muted{font-size:12.5px;line-height:1.5}
+@media(max-width:720px){.nav-link.keep span{display:inline}}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--mut);opacity:.45;vertical-align:middle}
+.dot.live{background:var(--ok);opacity:1;animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.65)}70%{box-shadow:0 0 0 10px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+.live-row{display:inline-flex;align-items:center;gap:8px}
