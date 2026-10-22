@@ -4,10 +4,11 @@ APP=/opt/vpnpanel
 LOG=/var/log/isile-install.log
 [ "$(id -u)" -eq 0 ] || { echo "run as root"; exit 1; }
 render(){
-local d="${1:-}" tls=0 LST SSL HSTS PROTO WS SSHWS
+local d="${1:-}" tls=0 LST SSL HSTS PROTO WS SSHWS PUB
 if [ -n "$d" ] && [ -s "/etc/letsencrypt/live/$d/fullchain.pem" ]; then tls=1; fi
 WS='proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $remote_addr; proxy_read_timeout 1d; proxy_send_timeout 1d; proxy_buffering off;'
-SSHWS='if ($http_upgrade = "") { return 404; } limit_req zone=vpnws burst=40 nodelay; limit_conn vpnconn 100; proxy_pass http://127.0.0.1:10022;'
+SSHWS='if ($http_upgrade = "") { rewrite "^/([a-z][a-z0-9_]{2,19})$" /_pub/$1 last; } if ($http_upgrade = "") { return 404; } limit_req zone=vpnws burst=40 nodelay; limit_conn vpnconn 100; proxy_pass http://127.0.0.1:10022;'
+PUB='location ^~ /_pub/ { internal; limit_req zone=vpnpub burst=20 nodelay; proxy_pass http://127.0.0.1:8000/p/; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; }'
 LST='listen 2080; listen [::]:2080;'
 SSL=""
 HSTS=""
@@ -24,16 +25,21 @@ cat <<EOT
 limit_req_zone \$binary_remote_addr zone=vpnlogin:10m rate=5r/s;
 limit_req_zone \$binary_remote_addr zone=vpnws:10m rate=20r/s;
 limit_conn_zone \$binary_remote_addr zone=vpnconn:10m;
+limit_req_zone \$binary_remote_addr zone=vpnpub:10m rate=5r/s;
 server {
 listen 80 default_server;
 listen [::]:80 default_server;
 server_name _;
 server_tokens off;
 location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
-location ^~ /vless { proxy_pass http://127.0.0.1:10011; $WS }
-location ^~ /vmess { proxy_pass http://127.0.0.1:10013; $WS }
-location ^~ /trojan { proxy_pass http://127.0.0.1:10012; $WS }
+location = /vless { proxy_pass http://127.0.0.1:10011; $WS }
+location ^~ /vless/ { proxy_pass http://127.0.0.1:10011; $WS }
+location = /vmess { proxy_pass http://127.0.0.1:10013; $WS }
+location ^~ /vmess/ { proxy_pass http://127.0.0.1:10013; $WS }
+location = /trojan { proxy_pass http://127.0.0.1:10012; $WS }
+location ^~ /trojan/ { proxy_pass http://127.0.0.1:10012; $WS }
 location / { $SSHWS $WS }
+$PUB
 }
 EOT
 if [ "$tls" = 1 ]; then
@@ -44,10 +50,14 @@ listen [::]:443 ssl default_server;
 server_name _;
 server_tokens off;
 $SSL
-location ^~ /vless { proxy_pass http://127.0.0.1:10001; $WS }
-location ^~ /vmess { proxy_pass http://127.0.0.1:10003; $WS }
-location ^~ /trojan { proxy_pass http://127.0.0.1:10002; $WS }
+location = /vless { proxy_pass http://127.0.0.1:10001; $WS }
+location ^~ /vless/ { proxy_pass http://127.0.0.1:10001; $WS }
+location = /vmess { proxy_pass http://127.0.0.1:10003; $WS }
+location ^~ /vmess/ { proxy_pass http://127.0.0.1:10003; $WS }
+location = /trojan { proxy_pass http://127.0.0.1:10002; $WS }
+location ^~ /trojan/ { proxy_pass http://127.0.0.1:10002; $WS }
 location / { $SSHWS $WS }
+$PUB
 }
 EOT
 fi
