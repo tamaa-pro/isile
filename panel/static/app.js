@@ -233,11 +233,12 @@ try{await api('POST','/api/password',{old:o.value,new:n.value});toast(t('s_chang
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
 const res=el('div',{class:'kvs'});
-const showDom=r=>res.replaceChildren(
+const showDom=r=>res.replaceChildren(...[
 kv(t('dm_current'),r.domain||t('dm_none')),
 kv(t('dm_server_ip'),r.server_ip||'—'),
 kv(t('dm_dns'),r.dns.length?r.dns.join(', '):'—',r.candidate?pill(r.match?'ok':'bad',r.match?t('dm_match'):t('dm_nomatch')):null),
-kv(t('dm_cert'),r.cert?t('dm_cert_days',r.cert.days_left)+' ('+dt(r.cert.expires)+')':t('dm_cert_none')));
+kv(t('dm_cert'),r.cert?t('dm_cert_days',r.cert.days_left)+' ('+dt(r.cert.expires)+')':t('dm_cert_none')),
+r.candidate&&!r.match?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',r.candidate,r.server_ip||'—')):null].filter(Boolean));
 const verify=async(quiet)=>{try{const r=await api('GET','/api/domain'+(dom.value.trim()?'?d='+encodeURIComponent(dom.value.trim().toLowerCase()):''));showDom(r);if(!quiet)toast(t('dm_checked'))}catch(e){terr(e)}};
 verify(true);
 const applyDom=()=>{
