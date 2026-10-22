@@ -170,3 +170,16 @@ dialog::backdrop{background:rgba(5,8,20,.68);backdrop-filter:blur(3px)}
 .dot.live{background:var(--ok);opacity:1;animation:pulse 1.6s ease-out infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.65)}70%{box-shadow:0 0 0 10px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
 .live-row{display:inline-flex;align-items:center;gap:8px}
+
+.pubwrap{width:min(520px,100%);display:grid;gap:14px}
+.pub-tools{display:flex;justify-content:flex-end;gap:6px}
+.pub{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:26px 24px;box-shadow:var(--shadow);display:grid;gap:16px}
+.pub-h{display:grid;gap:10px;justify-items:center;text-align:center}
+.pub-h h2{direction:ltr;word-break:break-all}
+.pub-h .row{justify-content:center}
+.pub-sec{display:grid;gap:6px}
+.pub-sec .meter{height:10px}
+.pub-big{font-size:22px;font-weight:700}
+.pub-nf{text-align:center;padding:20px;color:var(--mut);display:grid;gap:12px;font-size:16px}
+.pub-nf i{font-size:34px;color:var(--bad)}
+.ctr{text-align:center}

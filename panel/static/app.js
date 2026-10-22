@@ -9,13 +9,14 @@ const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
 const api=async(m,u,b)=>{const r=await fetch(u,{method:m,headers:{'Content-Type':'application/json','X-CSRF':csrf},body:b?JSON.stringify(b):undefined,credentials:'same-origin'});if(r.status===401){location.href='/login';throw new Error('unauthorized')}const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error||'error'),{detail:j.detail});return j};
+const spd=(u,d)=>'↓ '+bytes(d)+'/s  ↑ '+bytes(u)+'/s';
 const bytes=n=>{if(!n||n<0)return'0 B';const u=['B','KB','MB','GB','TB','PB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),5);return(n/1024**i).toFixed(i?2:0)+' '+u[i]};
 const dt=ts=>ts?new Date(ts*1000).toLocaleDateString('en-GB'):t('unlimited');
 const left=ts=>{if(!ts)return t('unlimited');const d=Math.ceil((ts*1000-Date.now())/864e5);return d>0?t('days_n',d):t('ended')};
 const upt=s=>{const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?t('d_short',d)+' ':'')+t('h_short',h)+' '+t('m_short',m)};
 const rnd=n=>{const c='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=new Uint32Array(n);crypto.getRandomValues(a);return Array.from(a,x=>c[x%c.length]).join('')};
 const toast=m=>{const x=el('div',{class:'toast'},m);document.body.append(x);setTimeout(()=>x.remove(),3500)};
-const terr=e=>{if(e.message==='unauthorized')return;const k='e_'+e.message;const m=tx(k);toast(m!==k?m:(e.detail||e.message))};
+const terr=e=>{if(e.message==='unauthorized')return;const k='e_'+e.message;const m=tx(k);toast(m!==k?m+(e.detail?': '+e.detail:''):(e.detail||e.message))};
 const field=(l,i,h)=>el('label',{class:'f'},el('span',{},l),i,h?el('small',{class:'muted'},h):null);
 const kv=(l,v,x)=>el('div',{class:'kv'},el('span',{},l),el('b',{class:'ltr'},v),x);
 const copy=async v=>{try{await navigator.clipboard.writeText(v);toast(t('copied'))}catch{toast(t('copy_fail'))}};
@@ -123,7 +124,7 @@ return el('tr',{},
 el('td',{},el('b',{},a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(a.proto),el('div',{class:'muted sm'},tlsTag)),
 el('td',{},pill(SC[a.status],t('st_'+a.status))),
-el('td',{},liveDot(act&&a.active)),
+el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active)),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
 el('td',{},el('div',{},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
 el('td',{},el('div',{class:'acts'},
@@ -164,6 +165,7 @@ const used=r.up+r.down;
 const head=el('div',{class:'info-h'},
 el('div',{class:'row'},badge(r.proto),pill(SC[r.status],t('st_'+r.status))),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active),t(r.active?'live_on':'live_off'))),
+r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
 el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{},dt(r.expires)+' · '+left(r.expires))));
@@ -272,7 +274,7 @@ field(t('lim_cap'),cap,t('lim_cap_hint')),
 field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
 el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_reset'),'eraser',resetMonth)))),
-panel('eye',t('pub_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pub_desc')),seg([{v:'on',l:t('pub_on'),i:'eye'},{v:'off',l:t('pub_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pub_saved'))}catch(e){terr(e);viewSettings()}}),kv(t('pub_example'),(s.tls_on?'https':'http')+'://'+(s.domain||s.server_ip||location.hostname)+'/username'))),
+panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}))),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs'},
 kv(t('sys_version'),VERSION),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
