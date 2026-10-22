@@ -30,6 +30,14 @@ trap - ERR
 die "command failed (exit $code): ${FAILED_CMD:-$2} [line $1]"
 }
 trap 'on_err $LINENO "$BASH_COMMAND"' ERR
+detect_ip(){
+local ip
+ip="$(curl -fsS4 --max-time 8 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
+[[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || ip="$(curl -fsS4 --max-time 8 https://api.ipify.org 2>/dev/null | tr -d '[:space:]' || true)"
+[[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || ip=""
+echo "$ip"
+}
+dbget(){ python3 -c 'import sqlite3,sys;r=sqlite3.connect(sys.argv[1]).execute("SELECT v FROM settings WHERE k=?",(sys.argv[2],)).fetchone();print(r[0] if r else "")' "$DATA/panel.db" "$1"; }
 L(){
 echo "+ $*" >>"$LOG"
 if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
@@ -41,29 +49,37 @@ if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
 OLDV="$(cat "$APP/panel/VERSION" 2>/dev/null || echo none)"
 if [ "$MODE" = install ]; then
 STEP="reading settings"
-read -rp "Domain (A record must point to this server): " DOMAIN </dev/tty
+read -rp "Domain (press Enter to skip and use the server address without TLS): " DOMAIN </dev/tty
 DOMAIN="$(echo "$DOMAIN" | tr 'A-Z' 'a-z' | tr -d ' ')"
+EMAIL=""
+if [ -n "$DOMAIN" ]; then
 [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid domain: $DOMAIN"
 read -rp "Email for certificate notices (optional): " EMAIL </dev/tty
+fi
 read -rp "Admin username: " ADMIN_USER </dev/tty
 [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "username must be 3-32 chars of A-Za-z0-9_.-"
 read -rsp "Admin password (min 10 chars): " ADMIN_PASS </dev/tty; echo
 read -rsp "Confirm password: " ADMIN_PASS2 </dev/tty; echo
 [ "$ADMIN_PASS" = "$ADMIN_PASS2" ] || die "passwords do not match"
 [ "${#ADMIN_PASS}" -ge 10 ] || die "password is shorter than 10 characters"
+STEP="detecting server address"
+SERVER_IP="$(detect_ip)"
+if [ -z "$SERVER_IP" ]; then read -rp "Server public IP address: " SERVER_IP </dev/tty; fi
+[[ "$SERVER_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "cannot determine the server address"
+if [ -n "$DOMAIN" ]; then
 STEP="checking DNS"
-SERVER_IP="$(curl -fsS4 --max-time 8 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
 DOM_IP="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}' || true)"
-if [ -n "$SERVER_IP" ] && [ "$SERVER_IP" != "$DOM_IP" ]; then
+if [ "$SERVER_IP" != "$DOM_IP" ]; then
 echo "Warning: $DOMAIN resolves to '${DOM_IP:-nothing}' but this server is $SERVER_IP"
 read -rp "Continue anyway? [y/N]: " YN </dev/tty
 [[ "$YN" =~ ^[Yy]$ ]] || die "domain does not point to this server"
 fi
+fi
 else
 STEP="reading current settings"
 [ -f "$DATA/panel.db" ] || die "isile is not installed, run the install command instead"
-DOMAIN="$(python3 -c 'import sqlite3,sys;r=sqlite3.connect(sys.argv[1]).execute("SELECT v FROM settings WHERE k=?",("domain",)).fetchone();print(r[0] if r else "")' "$DATA/panel.db")"
-[ -n "$DOMAIN" ] || die "cannot read the domain from the panel database"
+DOMAIN="$(dbget domain)"
+SERVER_IP="$(detect_ip)"
 EMAIL=""
 fi
 STEP="installing packages"
@@ -143,7 +159,8 @@ sshd -t >>"$LOG" 2>&1 || { rm -f "$SSHD_CONF"; die "sshd rejected the generated 
 fi
 systemctl reload ssh >>"$LOG" 2>&1 || true
 STEP="issuing TLS certificate"
-echo "[6/8] TLS certificate"
+if [ -n "$DOMAIN" ]; then echo "[6/8] TLS certificate"; else echo "[6/8] No domain, skipping TLS certificate"; fi
+if [ -n "$DOMAIN" ]; then
 if [ ! -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/vpnpanel.conf <<EOT
@@ -168,6 +185,7 @@ install -d /etc/letsencrypt/renewal-hooks/deploy
 printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 chmod 755 /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 systemctl enable --now certbot.timer >>"$LOG" 2>&1 || true
+fi
 STEP="creating services"
 echo "[7/8] Creating services"
 cat > /etc/systemd/system/xray.service <<EOT
@@ -223,62 +241,19 @@ ProtectHome=true
 WantedBy=multi-user.target
 EOT
 if [ "$MODE" = install ]; then
-VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
+VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" VPN_SERVER_IP="$SERVER_IP" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
+else
+if [ -n "$SERVER_IP" ]; then VPN_SERVER_IP="$SERVER_IP" "$APP/venv/bin/python" "$APP/panel/app.py" setserver >>"$LOG" 2>&1 || true; fi
 fi
 chmod 600 "$DATA/panel.db"
 install -m755 "$APP/panel/isile.sh" /usr/local/bin/isile
-WS='proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $remote_addr; proxy_read_timeout 1d; proxy_send_timeout 1d; proxy_buffering off;'
-SSL="ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem; ssl_protocols TLSv1.2 TLSv1.3; ssl_session_cache shared:vpnssl:10m; ssl_session_timeout 1d; ssl_session_tickets off;"
-SSHWS='if ($http_upgrade = "") { return 404; } limit_req zone=vpnws burst=40 nodelay; limit_conn vpnconn 100; proxy_pass http://127.0.0.1:10022;'
-rm -f /etc/nginx/sites-enabled/default
-cat > /etc/nginx/conf.d/vpnpanel.conf <<EOT
-limit_req_zone \$binary_remote_addr zone=vpnlogin:10m rate=5r/s;
-limit_req_zone \$binary_remote_addr zone=vpnws:10m rate=20r/s;
-limit_conn_zone \$binary_remote_addr zone=vpnconn:10m;
-server {
-listen 80 default_server;
-listen [::]:80 default_server;
-server_name _;
-server_tokens off;
-location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
-location ^~ /vless { proxy_pass http://127.0.0.1:10011; $WS }
-location ^~ /vmess { proxy_pass http://127.0.0.1:10013; $WS }
-location ^~ /trojan { proxy_pass http://127.0.0.1:10012; $WS }
-location / { $SSHWS $WS }
-}
-server {
-listen 443 ssl default_server;
-listen [::]:443 ssl default_server;
-server_name _;
-server_tokens off;
-$SSL
-location ^~ /vless { proxy_pass http://127.0.0.1:10001; $WS }
-location ^~ /vmess { proxy_pass http://127.0.0.1:10003; $WS }
-location ^~ /trojan { proxy_pass http://127.0.0.1:10002; $WS }
-location / { $SSHWS $WS }
-}
-server {
-listen 2080 ssl;
-listen [::]:2080 ssl;
-server_name _;
-server_tokens off;
-client_max_body_size 64k;
-$SSL
-add_header Strict-Transport-Security "max-age=31536000" always;
-add_header X-Frame-Options "DENY" always;
-add_header X-Content-Type-Options "nosniff" always;
-add_header Referrer-Policy "no-referrer" always;
-add_header Content-Security-Policy "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
-location = /login { limit_req zone=vpnlogin burst=10 nodelay; proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-Proto https; }
-location / { proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-Proto https; }
-}
-EOT
-L nginx -t || die "nginx configuration test failed"
+STEP="configuring nginx"
+bash "$APP/panel/setdomain.sh" --render "$DOMAIN" >>"$LOG" 2>&1 || die "nginx configuration failed"
 STEP="starting services and firewall"
 echo "[8/8] Starting services"
 L ufw allow "$SSH_PORT/tcp"
 L ufw allow 80/tcp
-L ufw allow 443/tcp
+if [ -n "$DOMAIN" ]; then L ufw allow 443/tcp; fi
 L ufw allow 2080/tcp
 L ufw --force enable
 L systemctl daemon-reload
@@ -300,9 +275,10 @@ journalctl -u "$s" -n 12 --no-pager >>"$LOG" 2>&1 || true
 die "service $s is not running"
 fi
 done
+if [ -n "$DOMAIN" ]; then SCHEME=https; PUB="$DOMAIN"; else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
 CODE=000
 for i in $(seq 1 20); do
-CODE="$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1:2080/login || true)"
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:2080/login" || true)"
 [ "$CODE" = 200 ] && break
 sleep 1
 done
@@ -315,16 +291,22 @@ echo "=================================================="
 if [ "$MODE" = update ]; then
 echo "  isile updated successfully ($OLDV -> $NEWV)"
 echo "=================================================="
-echo " Panel URL : https://$DOMAIN:2080"
+echo " Panel URL : $SCHEME://$PUB:2080"
 echo " Your admin credentials were not changed."
 else
 echo "  isile $NEWV installed successfully"
 echo "=================================================="
-echo " Panel URL : https://$DOMAIN:2080"
+echo " Panel URL : $SCHEME://$PUB:2080"
 echo " Username  : $ADMIN_USER"
 echo " Password  : $ADMIN_PASS"
 echo "--------------------------------------------------"
+if [ -n "$DOMAIN" ]; then
 echo " Open ports 80, 443, 2080 and your SSH port in the cloud firewall."
+else
+echo " No domain: the panel and connections use plain HTTP without TLS."
+echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
+echo " You can add a domain later from the panel Settings."
+fi
 echo " Type  isile  to open the management menu:"
 echo "   1) Edit admin credentials"
 echo "   2) Show panel info"
