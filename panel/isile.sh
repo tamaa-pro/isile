@@ -7,18 +7,21 @@ PY="$APP/venv/bin/python"
 dbget(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);r=c.execute("SELECT v FROM settings WHERE k=?",(sys.argv[2],)).fetchone();print(r[0] if r else "")' "$DATA/panel.db" "$1"; }
 dbq(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);[print(*r) for r in c.execute(sys.argv[2])]' "$DATA/panel.db" "$1"; }
 show_info(){
-local d u
+local d u ip sc h
 d="$(dbget domain)"
+ip="$(dbget server_ip)"
 u="$(dbget admin_user)"
+if [ -n "$d" ]; then sc=https; h="$d"; else sc=http; h="${ip:-server-address}"; fi
 echo "=================================================="
 echo "  isile panel info"
 echo "=================================================="
 echo " Version   : $(cat "$APP/panel/VERSION" 2>/dev/null)"
-echo " Panel URL : https://$d:2080"
+echo " Panel URL : $sc://$h:2080"
 echo " Username  : $u"
 echo " Password  : (stored hashed, use option 1 to set a new one)"
-echo " Domain    : $d"
-echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel)"
+echo " Domain    : ${d:-not set (server address, no TLS)}"
+echo " Server IP : ${ip:-unknown}"
+if [ -n "$d" ]; then echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel, HTTPS)"; else echo " Ports     : 80 (no TLS) | 2080 (panel, HTTP)"; fi
 echo " Paths     : /vless /vmess /trojan (any other path = SSH WebSocket)"
 echo " Services  :"
 for s in vpnpanel vpnbridge xray nginx; do
@@ -54,8 +57,10 @@ bash <(curl -fsSL "https://raw.githubusercontent.com/$r/$b/install.sh") --update
 }
 uninstall(){
 local ans d n
+if [ "${1:-}" = "--yes" ]; then ans=YES; else
 echo "This removes the panel, Xray, the SSH bridge, all VPN accounts and the TLS certificate."
 read -rp "Type YES to continue: " ans
+fi
 [ "$ans" = "YES" ] || { echo "Cancelled"; return 1; }
 d="$(dbget domain)"
 local names
@@ -113,7 +118,7 @@ done
 case "${1:-}" in
 1) edit_admin;;
 2) show_info;;
-3) uninstall;;
+3) uninstall "${2:-}";;
 4) update;;
 *) menu;;
 esac

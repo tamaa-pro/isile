@@ -842,6 +842,10 @@ def main():
         if os.environ.get("VPN_ADMIN_PASS"):
             put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
         return
+    if cmd=="setserver":
+        if os.environ.get("VPN_SERVER_IP"):
+            put("server_ip",os.environ["VPN_SERVER_IP"])
+        return
     if cmd=="setdomain":
         put("domain",os.environ["VPN_DOMAIN"])
         return
