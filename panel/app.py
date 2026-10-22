@@ -2,7 +2,7 @@ import os,sys,re,json,time,uuid,hmac,base64,socket,secrets,shutil,sqlite3,tempfi
 from datetime import timedelta,datetime,timezone
 from shlex import quote as shq
 from urllib.parse import quote
-from flask import Flask,request,session,jsonify,render_template,redirect,make_response
+from flask import Flask,request,session,jsonify,render_template,redirect
 from werkzeug.security import generate_password_hash,check_password_hash
 BASE=os.path.dirname(os.path.abspath(__file__))
 APPDIR=os.path.dirname(BASE)
@@ -33,10 +33,12 @@ CPU={}
 ACTIVE={}
 ACTIVE_MIN=1024
 ACTIVE_TTL=25
-SPD={}
-SPD_WIN=30
-RESERVED=("vless","vmess","trojan")
 RUN=None
+SPEED={}
+SP_B={}
+SP_T=time.time()
+SPEED_TTL=30
+RESERVED=("login","api","static")
 try:
     with open(BASE+"/VERSION") as f:
         VERSION=f.read().strip()
@@ -184,39 +186,49 @@ def harvest_xray():
         if m:
             out.setdefault(m.group(1),[0,0])[0 if m.group(2)=="uplink" else 1]+=int(s.get("value",0) or 0)
     return out
-def track(n,u,d,now):
-    if u+d<=0:
-        return
-    l=SPD.setdefault(n,[])
-    l[:]=[e for e in l if now-e[0]<=SPD_WIN]
-    l.append((now,u,d))
-def speed_of(n):
-    now=time.time()
-    l=[e for e in SPD.get(n,[]) if now-e[0]<=SPD_WIN]
-    SPD[n]=l
-    if not l:
-        return 0.0,0.0
-    span=min(SPD_WIN,max(10,now-l[0][0]+10))
-    return sum(e[1] for e in l)/span,sum(e[2] for e in l)/span
 def collect(c):
+    global SPEED,SP_T
     with LOCK:
         x=harvest_xray()
         s=harvest_nft()
         um={r["uid"]:r["name"] for r in c.execute("SELECT name,uid FROM accounts WHERE uid IS NOT NULL")}
         now=time.time()
+        got={}
         for n,(u,d) in x.items():
             c.execute("UPDATE accounts SET up=up+?,down=down+? WHERE name=?",(u,d,n))
-            track(n,u,d,now)
+            g=got.setdefault(n,[0,0])
+            g[0]+=u
+            g[1]+=d
             if u+d>=ACTIVE_MIN:
                 ACTIVE[n]=now
         for uid,(u,d) in s.items():
             n=um.get(uid)
             if n:
                 c.execute("UPDATE accounts SET up=up+?,down=down+? WHERE name=?",(u,d,n))
-                track(n,u,d,now)
+                g=got.setdefault(n,[0,0])
+                g[0]+=u
+                g[1]+=d
                 if u+d>=ACTIVE_MIN:
                     ACTIVE[n]=now
         c.commit()
+        for n,(u,d) in got.items():
+            b=SP_B.setdefault(n,[0,0])
+            b[0]+=u
+            b[1]+=d
+        if now-SP_T>=8:
+            dt=now-SP_T
+            SPEED={n:(b[0]/dt,b[1]/dt,now) for n,b in SP_B.items()}
+            SP_B.clear()
+            SP_T=now
+def speed_of(n):
+    sp=SPEED.get(n)
+    if not sp or time.time()-sp[2]>SPEED_TTL:
+        return 0,0
+    return int(sp[0]),int(sp[1])
+def page_url(n):
+    return "%s://%s:2080/%s"%("https" if tls_on() else "http",host(),n)
+def public_on():
+    return get("public_page","0")=="1"
 def client_of(r):
     if r["proto"]=="trojan":
         return {"password":r["secret"],"email":r["name"],"level":0}
@@ -454,59 +466,6 @@ def index():
     if not valid_session():
         return redirect("/login")
     return render_template("index.html",csrf=session["csrf"],domain=get("domain",""),version=VERSION)
-PT={"ar":{"status":"الحالة","conn":"الاتصال","live_on":"متصل","live_off":"غير متصل","expiry":"الانتهاء","unlimited":"مفتوح","ended":"منتهي","days_n":"بقي {0} يوم","usage":"الاستهلاك","left":"المتبقي {0}","quota_over":"انتهى الاستهلاك المعطى","speed":"السرعة","mode":"وضع الاتصال","type":"النوع","st_active":"نشط","st_disabled":"معطّل","st_expired":"منتهي الصلاحية","st_limit":"انتهى الاستهلاك","other":"English","other_l":"en"},"en":{"status":"Status","conn":"Connection","live_on":"Connected","live_off":"Not connected","expiry":"Expiry","unlimited":"Unlimited","ended":"Ended","days_n":"{0} days left","usage":"Usage","left":"{0} left","quota_over":"Data allowance used up","speed":"Speed","mode":"Connection mode","type":"Type","st_active":"Active","st_disabled":"Disabled","st_expired":"Expired","st_limit":"Data used up","other":"العربية","other_l":"ar"}}
-PN={"ssh":"SSH","vless":"VLESS","vmess":"VMess","trojan":"Trojan"}
-SCLS={"active":"ok","disabled":"off","expired":"bad","limit":"warn"}
-def fmt_b(n):
-    if not n or n<0:
-        return "0 B"
-    u=["B","KB","MB","GB","TB","PB"]
-    i=min(int(len(str(int(n)))-1)//3,5)
-    return ("%.2f"%(n/1024**i) if i else "%d"%n)+" "+u[i]
-@app.get("/p/<name>")
-def public(name):
-    if get("public_page","1")!="1" or not NAME_RE.match(name):
-        return "",404
-    c=db()
-    r=c.execute("SELECT * FROM accounts WHERE name=?",(name,)).fetchone()
-    c.close()
-    if not r:
-        return "",404
-    lg=request.args.get("l")
-    if lg not in PT:
-        lg="ar"
-    T=PT[lg]
-    now=time.time()
-    st=calc(r,int(now))
-    live=st=="active" and now-ACTIVE.get(name,0)<ACTIVE_TTL
-    used=r["up"]+r["down"]
-    q=r["quota"]
-    ex=r["expires"]
-    sp=speed_of(name) if live else (0.0,0.0)
-    if ex:
-        days=int(-(-(ex-now)//86400))
-        exp_left=T["days_n"].format(days) if ex>now else T["ended"]
-        exp_date=time.strftime("%Y-%m-%d",time.gmtime(ex))
-    else:
-        exp_left=T["unlimited"]
-        exp_date=""
-    if q:
-        quota_t=fmt_b(used)+" / "+fmt_b(q)
-        left_t=T["left"].format(fmt_b(max(0,q-used))) if used<q else T["quota_over"]
-        pct=min(100,int(used*100/q))
-    else:
-        quota_t=fmt_b(used)+" / ∞"
-        left_t=T["unlimited"]
-        pct=None
-    p=r["proto"]
-    mode="80 + 443" if p=="ssh" else "TLS + 80" if r["tls"]=="both" else "TLS 443" if r["tls"]=="tls" else "80"
-    nonce=secrets.token_urlsafe(12)
-    resp=make_response(render_template("public.html",lang=lg,rtl=lg=="ar",T=T,name=name,proto=PN.get(p,p),st_t=T["st_"+st],st_cls=SCLS[st],live=live,exp_date=exp_date,exp_left=exp_left,quota_t=quota_t,left_t=left_t,pct=pct,down_t=fmt_b(sp[1])+"/s",up_t=fmt_b(sp[0])+"/s",mode=mode,nonce=nonce))
-    resp.headers["Content-Security-Policy"]="default-src 'none'; style-src 'nonce-%s'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"%nonce
-    resp.headers["X-Robots-Tag"]="noindex, nofollow"
-    resp.headers["X-Content-Type-Options"]="nosniff"
-    resp.headers["Referrer-Policy"]="no-referrer"
-    return resp
 @app.post("/api/logout")
 @auth
 def logout():
@@ -596,7 +555,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":get("public_page","1")=="1"}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -644,11 +603,12 @@ def start_job(kind,cmd):
         os.unlink(RCF)
     with open(JOBF,"w") as f:
         json.dump({"kind":kind,"started":time.time()},f)
-    r=sh(["systemd-run","--no-block","--collector","bash","-c","%s; echo $? > %s"%(cmd,RCF)])
+    r=sh(["systemd-run","--no-block","--collect","--quiet","bash","-c","%s; echo $? > %s"%(cmd,RCF)])
     if r.returncode:
-        os.unlink(JOBF)
-        return False
-    return True
+        if os.path.exists(JOBF):
+            os.unlink(JOBF)
+        return ((r.stderr or r.stdout or "").strip()[-300:]) or "systemd-run failed"
+    return ""
 @app.post("/api/domain")
 @auth
 def domain_set():
@@ -659,20 +619,23 @@ def domain_set():
         return err("bad_domain")
     if email and not EMAIL_RE.match(email):
         return err("bad_email")
-    if not start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email))):
-        return err("system")
+    e=start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email)))
+    if e:
+        return err("system",500,e)
     return jsonify(ok=True)
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
-    if not start_job("restart","sleep 1; systemctl restart xray vpnbridge nginx; systemctl restart vpnpanel"):
-        return err("system")
+    e=start_job("restart","sleep 1; systemctl restart xray vpnbridge nginx; systemctl restart vpnpanel")
+    if e:
+        return err("system",500,e)
     return jsonify(ok=True)
 @app.post("/api/system/update")
 @auth
 def sys_update():
-    if not start_job("update","/usr/local/bin/isile 4"):
-        return err("system")
+    e=start_job("update","/usr/local/bin/isile 4")
+    if e:
+        return err("system",500,e)
     return jsonify(ok=True)
 @app.post("/api/system/uninstall")
 @auth
@@ -680,8 +643,9 @@ def sys_uninstall():
     d=request.get_json(silent=True) or {}
     if not check_password_hash(get("admin_hash",""),str(d.get("password",""))):
         return err("wrong_password")
-    if not start_job("uninstall","/usr/local/bin/isile 3 --yes"):
-        return err("system")
+    e=start_job("uninstall","/usr/local/bin/isile 3 --yes")
+    if e:
+        return err("system",500,e)
     return jsonify(ok=True)
 @app.get("/api/system/job")
 @auth
@@ -720,6 +684,7 @@ def lst():
     for r in c.execute("SELECT * FROM accounts ORDER BY created DESC"):
         o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls")}
         o["active"]=r["status"]=="active" and time.time()-ACTIVE.get(r["name"],0)<ACTIVE_TTL
+        o["sp_up"],o["sp_down"]=speed_of(r["name"]) if o["active"] else (0,0)
         rows.append(o)
     c.close()
     return jsonify(rows)
@@ -758,7 +723,11 @@ def info(name):
                 v="trojan://%s@%s:%d?security=%s&%stype=ws&host=%s&path=%%2Ftrojan#%s"%(quote(s,safe=""),dom,443 if tls else 80,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-80"))
             items.append({"k":"link_tls" if tls else "link_plain","value":v,"rows":4})
         items.append({"k":"pass" if p=="trojan" else "uuid","value":s,"rows":1})
-    return jsonify(items=items,active=r["status"]=="active" and time.time()-ACTIVE.get(n,0)<ACTIVE_TTL,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],expires=r["expires"],proto=p,tls=r["tls"],tls_on=t_on)
+    if public_on():
+        items.insert(0,{"k":"page","value":page_url(n),"rows":1})
+    act=r["status"]=="active" and time.time()-ACTIVE.get(n,0)<ACTIVE_TTL
+    spu,spd=speed_of(n) if act else (0,0)
+    return jsonify(items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],expires=r["expires"],proto=p,tls=r["tls"],tls_on=t_on)
 def parse_common(d,creating):
     try:
         out={}
@@ -890,7 +859,6 @@ def delete(name):
             if not r:
                 return err("not_found",404)
             collect(c)
-            SPD.pop(name,None)
             if r["proto"]=="ssh":
                 ssh_del(name)
             c.execute("DELETE FROM accounts WHERE name=?",(name,))
@@ -902,6 +870,25 @@ def delete(name):
         finally:
             c.close()
     return jsonify(ok=True)
+@app.get("/api/public/<name>")
+def public_api(name):
+    name=name.lower()
+    if not public_on() or not NAME_RE.match(name):
+        return err("not_found",404)
+    c=db()
+    r=c.execute("SELECT * FROM accounts WHERE name=?",(name,)).fetchone()
+    c.close()
+    if not r:
+        return err("not_found",404)
+    act=r["status"]=="active" and time.time()-ACTIVE.get(name,0)<ACTIVE_TTL
+    spu,spd=speed_of(name) if act else (0,0)
+    return jsonify(name=r["name"],proto=r["proto"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()))
+@app.get("/<name>")
+def public_page(name):
+    name=name.lower()
+    if not public_on() or name in RESERVED or not NAME_RE.match(name):
+        return "Not found",404
+    return render_template("public.html",name=name,version=VERSION)
 def main():
     cmd=sys.argv[1] if len(sys.argv)>1 else "serve"
     init_db()
