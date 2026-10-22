@@ -1,23 +1,21 @@
 <!doctype html>
-<html lang="{{ lang }}" dir="{{ 'rtl' if rtl else 'ltr' }}">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<meta http-equiv="refresh" content="15">
-<title>{{ name }}</title>
-<style nonce="{{ nonce }}">:root{--bg:#f4f6fb;--c:#fff;--t:#161b26;--m:#667085;--b:#e3e7ef;--ok:#16a34a;--bad:#dc2626;--warn:#d97706;--pri:#4f6ef7}@media(prefers-color-scheme:dark){:root{--bg:#0e1118;--c:#171b26;--t:#e8ecf5;--m:#8b93a7;--b:#262c3b}}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:var(--bg);color:var(--t);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif}.card{width:100%;max-width:440px;background:var(--c);border:1px solid var(--b);border-radius:16px;padding:22px;box-shadow:0 8px 30px rgba(0,0,0,.08)}header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}h1{margin:0;font-size:20px;direction:ltr;word-break:break-all}.pb{background:var(--pri);color:#fff;border-radius:8px;padding:2px 10px;font-size:13px;font-weight:600}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid var(--b)}.row>span{color:var(--m)}.row>div{min-width:55%;text-align:end}.sub{display:block;color:var(--m);font-size:13px}.pill{border-radius:999px;padding:2px 12px;font-size:13px;font-weight:600}.ok{background:rgba(22,163,74,.15);color:var(--ok)}.bad{background:rgba(220,38,38,.15);color:var(--bad)}.warn{background:rgba(217,119,6,.15);color:var(--warn)}.off{background:rgba(128,128,128,.18);color:var(--m)}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#9aa3b5;margin-inline-end:8px}.dot.live{background:var(--ok);animation:p 1.4s infinite}@keyframes p{0%{box-shadow:0 0 0 0 rgba(22,163,74,.55)}100%{box-shadow:0 0 0 9px rgba(22,163,74,0)}}progress{width:100%;height:8px;margin-top:6px;appearance:none;border:0;border-radius:99px;overflow:hidden;background:var(--b)}progress::-webkit-progress-bar{background:var(--b)}progress::-webkit-progress-value{background:var(--pri)}progress::-moz-progress-bar{background:var(--pri)}.ltr{direction:ltr;unicode-bidi:embed}footer{margin-top:16px;text-align:center;font-size:13px}footer a{color:var(--pri);text-decoration:none}</style>
+<meta name="acc" content="{{ name }}">
+<title>VPN</title>
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/fa/css/all.min.css">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/i18n.js" defer></script>
+<script src="/static/public.js" defer></script>
 </head>
-<body>
-<main class="card">
-<header><h1>{{ name }}</h1><span class="pb">{{ proto }}</span></header>
-<div class="row"><span>{{ T.status }}</span><div><span class="pill {{ st_cls }}">{{ st_t }}</span></div></div>
-<div class="row"><span>{{ T.conn }}</span><div><span class="dot{{ ' live' if live else '' }}"></span>{{ T.live_on if live else T.live_off }}</div></div>
-<div class="row"><span>{{ T.expiry }}</span><div>{{ exp_left }}{% if exp_date %}<span class="sub ltr">{{ exp_date }}</span>{% endif %}</div></div>
-<div class="row"><span>{{ T.usage }}</span><div><b class="ltr">{{ quota_t }}</b><span class="sub">{{ left_t }}</span>{% if pct is not none %}<progress max="100" value="{{ pct }}"></progress>{% endif %}</div></div>
-<div class="row"><span>{{ T.speed }}</span><div class="ltr">&darr; {{ down_t }}<span class="sub">&uarr; {{ up_t }}</span></div></div>
-<div class="row"><span>{{ T.mode }}</span><div class="ltr">{{ mode }}</div></div>
-<footer><a href="?l={{ T.other_l }}">{{ T.other }}</a></footer>
-</main>
+<body class="center">
+<div class="pubwrap">
+<div class="pub-tools" id="tools"></div>
+<div id="pub"></div>
+</div>
 </body>
 </html>
