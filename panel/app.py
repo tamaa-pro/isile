@@ -310,6 +310,7 @@ def restart_xray(c):
         collect(c)
     sh(["systemctl","restart","xray"])
 def hot(rm,add):
+    return False
     for tag,emails in rm.items():
         r=sh([XBIN,"api","rmu","-s",XAPI,"-tag="+tag]+emails)
         if r.returncode:
