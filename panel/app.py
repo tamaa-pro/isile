@@ -781,11 +781,17 @@ def info(name):
 def parse_common(d,creating):
     try:
         out={}
-        if creating or d.get("days") not in (None,""):
+        now=int(time.time())
+        if d.get("expires") not in (None,""):
+            e=int(d["expires"])
+            if e<0 or e>now+3650*86400:
+                return None
+            out["expires"]=e
+        elif creating or d.get("days") not in (None,""):
             days=int(d.get("days") or 0)
             if not 0<=days<=3650:
                 return None
-            out["days"]=days
+            out["expires"]=now+days*86400 if days else 0
         if creating or d.get("quota_gb") not in (None,""):
             q=float(d.get("quota_gb") or 0)
             if not 0<=q<=100000:
@@ -809,6 +815,8 @@ def create():
     pc=parse_common(d,True)
     if pc is None:
         return err("bad_values")
+    if pc["expires"] and pc["expires"]<=int(time.time()):
+        return err("past_date")
     tls=d.get("tls","both" if proto=="ssh" else "tls")
     if tls not in ("tls","plain","both"):
         return err("bad_values")
@@ -842,7 +850,7 @@ def create():
                 except RuntimeError as e:
                     return err("system",400,str(e))
             now=int(time.time())
-            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport) VALUES(?,?,?,?,?,?,?,?,'active',?,?)",(name,proto,sec,uid,now,now+pc["days"]*86400 if pc["days"] else 0,pc["quota"],note,tls,transport))
+            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport) VALUES(?,?,?,?,?,?,?,?,'active',?,?)",(name,proto,sec,uid,now,pc["expires"],pc["quota"],note,tls,transport))
             c.commit()
             if proto=="ssh":
                 collect(c)
@@ -880,8 +888,8 @@ def edit(name):
             pc=parse_common(d,False)
             if pc is None:
                 return err("bad_values")
-            if "days" in pc:
-                sets["expires"]=int(time.time())+pc["days"]*86400 if pc["days"] else 0
+            if "expires" in pc:
+                sets["expires"]=pc["expires"]
             if "quota" in pc:
                 sets["quota"]=pc["quota"]
             if d.get("tls"):
