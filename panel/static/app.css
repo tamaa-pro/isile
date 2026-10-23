@@ -56,7 +56,8 @@ main.enter{animation:rise .35s ease}
 .meter{height:7px;background:var(--card2);border-radius:99px;overflow:hidden;border:1px solid var(--line)}
 .meter i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--pri),var(--pri2));transition:width .5s}
 .meter.bad i{background:linear-gradient(90deg,#f97316,var(--bad))}
-.m-ssh i{background:linear-gradient(90deg,#f59e0b,#fbbf24)}
+.m-sshws i{background:linear-gradient(90deg,#f59e0b,#fbbf24)}
+.m-sshssl i{background:linear-gradient(90deg,#14b8a6,#2dd4bf)}
 .m-vless i{background:linear-gradient(90deg,#6366f1,#818cf8)}
 .m-vmess i{background:linear-gradient(90deg,#8b5cf6,#c084fc)}
 .m-trojan i{background:linear-gradient(90deg,#ec4899,#fb7185)}
@@ -71,7 +72,8 @@ main.enter{animation:rise .35s ease}
 .pill.warn{background:rgba(245,158,11,.14);color:var(--warn);border-color:rgba(245,158,11,.3)}
 .pill.off{color:var(--mut)}
 .pb{display:inline-flex;align-items:center;gap:6px;padding:2px 11px;border-radius:9px;font-size:13px;font-weight:600}
-.p-ssh{background:rgba(245,158,11,.15);color:#f59e0b}
+.p-sshws{background:rgba(245,158,11,.15);color:#f59e0b}
+.p-sshssl{background:rgba(20,184,166,.15);color:#14b8a6}
 .p-vless{background:rgba(99,102,241,.16);color:#818cf8}
 .p-vmess{background:rgba(139,92,246,.16);color:#a78bfa}
 .p-trojan{background:rgba(236,72,153,.15);color:#f472b6}

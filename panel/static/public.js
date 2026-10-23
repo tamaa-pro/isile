@@ -1,7 +1,8 @@
 'use strict';
 const $=(s,r=document)=>r.querySelector(s);
 const NAME=$('meta[name=acc]').content;
-const PM={ssh:{i:'terminal',n:'SSH'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':'sshws'):a.proto;
 const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
@@ -22,16 +23,16 @@ document.title=NAME;
 const box=$('#pub');
 if(NF){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('circle-exclamation'),el('div',{},t('p_not_found'))));return}
 if(!D){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('spinner','fa-spin')));return}
-const a=D,used=a.up+a.down,now=Date.now()/1000;
+const a=D,K=pk(a),used=a.up+a.down,now=Date.now()/1000;
 const tlsTag=a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
 const pc=a.quota?used/a.quota*100:0;
 let vp=null;
 if(a.expires&&a.created&&a.expires>a.created)vp=Math.max(0,Math.min(100,(a.expires-now)/(a.expires-a.created)*100));
 box.replaceChildren(el('div',{class:'pub'},
 el('div',{class:'pub-h'},
-el('span',{class:'logo big'},ic(PM[a.proto]?PM[a.proto].i:'shield-halved')),
+el('span',{class:'logo big'},ic(PM[K]?PM[K].i:'shield-halved')),
 el('h2',{},a.name),
-el('div',{class:'row'},el('span',{class:'pb p-'+a.proto},ic(PM[a.proto].i),PM[a.proto].n),el('span',{class:'muted sm'},tlsTag),el('span',{class:'pill '+SC[a.status]},t('st_'+a.status)))),
+el('div',{class:'row'},el('span',{class:'pb p-'+K},ic(PM[K]?PM[K].i:'shield-halved'),PM[K]?PM[K].n:a.proto),el('span',{class:'muted sm'},tlsTag),el('span',{class:'pill '+SC[a.status]},t('st_'+a.status)))),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},el('span',{class:'dot'+(a.active?' live':'')}),t(a.active?'live_on':'live_off'))),
 kv('gauge-high',t('p_speed'),'↓ '+bytes(a.sp_down)+'/s  ↑ '+bytes(a.sp_up)+'/s'),
 el('div',{class:'pub-sec'},

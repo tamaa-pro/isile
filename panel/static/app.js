@@ -4,7 +4,8 @@ const csrf=$('meta[name=csrf]').content;
 const VERSION=$('meta[name=version]').content;
 const NS='http://www.w3.org/2000/svg';
 const GB=1073741824;
-const PM={ssh:{i:'terminal',n:'SSH'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':'sshws'):a.proto;
 const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
@@ -108,12 +109,12 @@ tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)),
 tile('chart-line','c7',t('d_traffic'),bytes(up+dn),'↑ '+bytes(up)+' · ↓ '+bytes(dn)),
 tile('clock','c8',t('d_uptime'),upt(s.uptime),t('d_load')+' '+s.load.map(x=>x.toFixed(2)).join(' / ')));
 const tot=Math.max(1,up+dn);
-const byp=el('div',{class:'list'},...Object.keys(PM).map(p=>{const l=A.filter(a=>a.proto===p);const tr=l.reduce((x,a)=>x+a.up+a.down,0);return el('div',{class:'li'},el('div',{class:'li-h'},badge(p),el('b',{},l.length),el('span',{class:'muted'},bytes(tr))),meter(tr/tot*100,'m-'+p))}));
+const byp=el('div',{class:'list'},...Object.keys(PM).map(p=>{const l=A.filter(a=>pk(a)===p);const tr=l.reduce((x,a)=>x+a.up+a.down,0);return el('div',{class:'li'},el('div',{class:'li-h'},badge(p),el('b',{},l.length),el('span',{class:'muted'},bytes(tr))),meter(tr/tot*100,'m-'+p))}));
 const top=[...A].sort((a,b)=>b.up+b.down-a.up-a.down).slice(0,5).filter(a=>a.up+a.down>0);
-const topL=el('div',{class:'list'},...(top.length?top.map(a=>el('div',{class:'li'},el('div',{class:'li-h'},badge(a.proto),el('b',{},a.name),el('span',{class:'muted'},bytes(a.up+a.down))),meter((a.up+a.down)/(top[0].up+top[0].down)*100,'m-'+a.proto))):[el('div',{class:'empty'},t('d_none'))]));
+const topL=el('div',{class:'list'},...(top.length?top.map(a=>el('div',{class:'li'},el('div',{class:'li-h'},badge(pk(a)),el('b',{},a.name),el('span',{class:'muted'},bytes(a.up+a.down))),meter((a.up+a.down)/(top[0].up+top[0].down)*100,'m-'+pk(a)))):[el('div',{class:'empty'},t('d_none'))]));
 const now=Date.now()/1000;
 const exp=A.filter(a=>a.expires&&a.expires>now&&a.expires-now<7*86400).sort((a,b)=>a.expires-b.expires).slice(0,6);
-const expL=el('div',{class:'list'},...(exp.length?exp.map(a=>el('div',{class:'li li-r'},badge(a.proto),el('b',{},a.name),el('span',{class:'muted'},left(a.expires)))):[el('div',{class:'empty'},t('d_none'))]));
+const expL=el('div',{class:'list'},...(exp.length?exp.map(a=>el('div',{class:'li li-r'},badge(pk(a)),el('b',{},a.name),el('span',{class:'muted'},left(a.expires)))):[el('div',{class:'empty'},t('d_none'))]));
 const sv=el('div',{class:'svc'},...Object.entries(s.services).map(([k,v])=>el('span',{class:'pill '+(v?'ok':'bad')},ic(v?'circle-check':'circle-xmark'),k)));
 $('#view').replaceChildren(row1,trf,row2,el('div',{class:'grid g2'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid g2'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv)))
 }
@@ -127,7 +128,7 @@ const act=a.status==='active';
 const tlsTag=a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
 return el('tr',{},
 el('td',{},el('b',{},a.name),a.note?el('div',{class:'muted sm'},a.note):null),
-el('td',{},badge(a.proto),el('div',{class:'muted sm'},tlsTag)),
+el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
 el('td',{},pill(SC[a.status],t('st_'+a.status))),
 el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active)),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
@@ -140,7 +141,7 @@ el('button',{class:'icon-btn danger',title:t('a_delete'),onclick:()=>del(a)},ic(
 }
 function drawRows(){
 const q=F.q.trim().toLowerCase();
-const l=ACC.filter(a=>(!F.p||a.proto===F.p)&&(!F.s||a.status===F.s)&&(!q||a.name.includes(q)||a.note.toLowerCase().includes(q)));
+const l=ACC.filter(a=>(!F.p||pk(a)===F.p)&&(!F.s||a.status===F.s)&&(!q||a.name.includes(q)||a.note.toLowerCase().includes(q)));
 const r=$('#rows');if(!r)return;
 r.replaceChildren(...(l.length?l.map(accRow):[el('tr',{},el('td',{colspan:7,class:'empty'},t('a_empty')))]));
 const c=$('#cnt');if(c)c.textContent=l.length+' / '+ACC.length
@@ -168,7 +169,7 @@ try{
 const r=await api('GET','/api/accounts/'+n+'/info');
 const used=r.up+r.down;
 const head=el('div',{class:'info-h'},
-el('div',{class:'row'},badge(r.proto),pill(SC[r.status],t('st_'+r.status))),
+el('div',{class:'row'},badge(pk(r)),pill(SC[r.status],t('st_'+r.status))),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active),t(r.active?'live_on':'live_off'))),
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
@@ -185,7 +186,7 @@ if(!S){try{await loadStats()}catch(e){}}
 const ed=!!a;
 const tlsOn=!S||S.tls_on!==false;
 const forced=!tlsOn&&!ed;
-const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',tls:forced?'plain':ed?a.tls:'both'};
+const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',transport:ed&&a.proto==='ssh'?(a.transport||'ws'):'ws',tls:forced?'plain':ed?a.tls:'both'};
 const name=el('input',{placeholder:'user1',maxlength:20,autocomplete:'off',dir:'ltr',value:ed?a.name:''});
 if(ed)name.disabled=true;
 const secret=el('input',{autocomplete:'off',dir:'ltr',placeholder:ed?t('f_keep'):t('f_auto')});
@@ -197,18 +198,22 @@ const genSec=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclic
 const kindSeg=seg([{v:'ssh',l:'SSH',i:'terminal'},{v:'v2',l:'V2Ray',i:'bolt'}],st.kind,v=>{st.kind=v;sync()});
 const protoSeg=seg([{v:'vless',l:'VLESS',i:'bolt'},{v:'vmess',l:'VMess',i:'diagram-project'},{v:'trojan',l:'Trojan',i:'shield-halved'}],st.proto,v=>{st.proto=v;sync()});
 const tlsSeg=seg([{v:'tls',l:t('tls_tls'),i:'lock'},{v:'plain',l:t('tls_plain'),i:'lock-open'},{v:'both',l:t('tls_both'),i:'layer-group'}],st.tls,v=>{st.tls=v});
+const transportSeg=seg([{v:'ws',l:t('tr_ws'),i:'globe'},{v:'ssl',l:t('tr_ssl'),i:'lock'}],st.transport,v=>{st.transport=v;sync()});
 const tlsHint=el('div',{class:'hint'},ic('triangle-exclamation'),t('tls_unavailable'));
 const secLabel=el('span',{});
 const boxProto=field(t('f_proto'),protoSeg);
-const boxTls=field(t('f_tls'),tlsSeg,t('f_tls_hint'));
+const tlsHintTxt=el('small',{class:'muted'},t('f_tls_hint'));
+const boxTls=el('label',{class:'f'},el('span',{},t('f_tls')),tlsSeg,tlsHintTxt);
+const boxTransport=field(t('f_transport'),transportSeg,t('f_transport_hint'));
 const boxKind=field(t('f_type'),kindSeg);
 function sync(){
 const v2=st.kind==='v2';
-boxProto.hidden=!v2||ed;boxTls.hidden=forced;tlsHint.hidden=!forced;
+boxProto.hidden=!v2||ed;boxTransport.hidden=v2;boxTls.hidden=forced;tlsHint.hidden=!forced;
+tlsHintTxt.textContent=t(!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
-ed?null:boxKind,boxProto,boxTls,tlsHint,
+ed?null:boxKind,boxProto,boxTransport,boxTls,tlsHint,
 field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'two'},
@@ -218,7 +223,7 @@ field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
 btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
-const b={secret:secret.value,days:days.value,quota_gb:quota.value,note:note.value,tls:st.tls};
+const b={secret:secret.value,days:days.value,quota_gb:quota.value,note:note.value,tls:st.tls,transport:st.transport};
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
 else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/accounts',{...b,proto,name:name.value});d.close();await loadAcc();drawRows();infoDlg(r.name)}
