@@ -8,6 +8,7 @@ const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Obje
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
 const bytes=n=>{if(!n||n<0)return'0 B';const u=['B','KB','MB','GB','TB','PB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),5);return(n/1024**i).toFixed(i?2:0)+' '+u[i]};
 const meter=(p,c='')=>{const i=el('i');i.style.width=Math.max(0,Math.min(100,p))+'%';return el('div',{class:'meter '+c},i)};
+const loc=cc=>{if(!/^[A-Z]{2}$/.test(cc||''))return null;let n=cc;try{n=new Intl.DisplayNames([LANG],{type:'region'}).of(cc)||cc}catch(e){}const f=String.fromCodePoint(...[...cc].map(c=>127397+c.charCodeAt(0)));return el('div',{class:'kv'},el('span',{},ic('location-dot'),t('p_location')),el('b',{},f+' '+n))};
 const kv=(i,l,v,c='ltr')=>el('div',{class:'kv'},el('span',{},ic(i),l),el('b',{class:c},v));
 let D=null,NF=false,OFF=false;
 function tools(){
@@ -31,6 +32,7 @@ el('div',{class:'pub-h'},
 el('span',{class:'logo big'},ic(PM[K]?PM[K].i:'shield-halved')),
 el('h2',{},a.name),
 el('div',{class:'row'},el('span',{class:'pb p-'+K},ic(PM[K]?PM[K].i:'shield-halved'),PM[K]?PM[K].n:a.proto),el('span',{class:'muted sm'},tlsTag),el('span',{class:'pill '+SC[a.status]},t('st_'+a.status)))),
+loc(a.cc),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},el('span',{class:'dot'+(a.active?' live':'')}),t(a.active?'live_on':'live_off'))),
 kv('gauge-high',t('p_speed'),'↓ '+bytes(a.sp_down)+'/s  ↑ '+bytes(a.sp_up)+'/s'),
 el('div',{class:'pub-sec'},
