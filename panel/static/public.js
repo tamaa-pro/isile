@@ -7,10 +7,8 @@ const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
 const bytes=n=>{if(!n||n<0)return'0 B';const u=['B','KB','MB','GB','TB','PB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),5);return(n/1024**i).toFixed(i?2:0)+' '+u[i]};
-const dt=ts=>ts?new Date(ts*1000).toLocaleDateString('en-GB'):t('unlimited');
-const left=ts=>{if(!ts)return t('unlimited');const d=Math.ceil((ts*1000-Date.now())/864e5);return d>0?t('days_n',d):t('ended')};
 const meter=(p,c='')=>{const i=el('i');i.style.width=Math.max(0,Math.min(100,p))+'%';return el('div',{class:'meter '+c},i)};
-const kv=(i,l,v)=>el('div',{class:'kv'},el('span',{},ic(i),l),el('b',{class:'ltr'},v));
+const kv=(i,l,v,c='ltr')=>el('div',{class:'kv'},el('span',{},ic(i),l),el('b',{class:c},v));
 let D=null,NF=false,OFF=false;
 function tools(){
 const th=document.documentElement.dataset.theme;
@@ -41,10 +39,10 @@ a.quota?meter(pc,pc>90?'bad':''):null,
 a.quota?el('div',{class:'muted sm'},t('p_left_tr')+': '+bytes(Math.max(0,a.quota-used))+' · '+pc.toFixed(1)+'%'):el('div',{class:'muted sm'},t('unlimited')),
 el('div',{class:'muted sm ltr'},'↓ '+bytes(a.down)+'  ↑ '+bytes(a.up))),
 el('div',{class:'pub-sec'},
-kv('calendar-plus',t('c_created'),dt(a.created)),
-kv('clock',t('c_expiry'),dt(a.expires)),
+kv('calendar-plus',t('c_created'),dt(a.created),'dtv'),
+kv('clock',t('c_expiry'),dt(a.expires),'dtv'),
 vp!==null?meter(vp,vp<10?'bad':''):null,
-el('div',{class:'muted sm'},t('p_validity')+': '+left(a.expires))),
+kv('hourglass-half',t('c_left'),left(a.expires),'')),
 el('div',{class:'muted sm ctr'},OFF?t('p_offline'):t('p_auto'))))
 }
 async function load(){

@@ -1,1 +1,1 @@
-(function(){let th='dark',lg='ar';try{th=localStorage.getItem('theme')||th;lg=localStorage.getItem('lang')||lg}catch(e){}const d=document.documentElement;d.dataset.theme=th;d.lang=lg;d.dir=lg==='ar'?'rtl':'ltr'})();
+(function(){let th='dark',lg='en';try{th=localStorage.getItem('theme')||th;lg=localStorage.getItem('lang')||lg}catch(e){}const d=document.documentElement;d.dataset.theme=th;d.lang=lg;d.dir=lg==='ar'?'rtl':'ltr'})();

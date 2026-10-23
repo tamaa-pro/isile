@@ -12,8 +12,6 @@ const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
 const api=async(m,u,b)=>{const r=await fetch(u,{method:m,headers:{'Content-Type':'application/json','X-CSRF':csrf},body:b?JSON.stringify(b):undefined,credentials:'same-origin'});if(r.status===401){location.href='/login';throw new Error('unauthorized')}const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error||'error'),{detail:j.detail});return j};
 const spd=(u,d)=>'↓ '+bytes(d)+'/s  ↑ '+bytes(u)+'/s';
 const bytes=n=>{if(!n||n<0)return'0 B';const u=['B','KB','MB','GB','TB','PB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),5);return(n/1024**i).toFixed(i?2:0)+' '+u[i]};
-const dt=ts=>ts?new Date(ts*1000).toLocaleDateString('en-GB'):t('unlimited');
-const left=ts=>{if(!ts)return t('unlimited');const d=Math.ceil((ts*1000-Date.now())/864e5);return d>0?t('days_n',d):t('ended')};
 const upt=s=>{const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?t('d_short',d)+' ':'')+t('h_short',h)+' '+t('m_short',m)};
 const rnd=n=>{const c='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=new Uint32Array(n);crypto.getRandomValues(a);return Array.from(a,x=>c[x%c.length]).join('')};
 const toast=m=>{const x=el('div',{class:'toast',popover:'manual'},m);document.body.append(x);try{x.showPopover()}catch(e){}setTimeout(()=>x.remove(),3500)};
@@ -24,7 +22,7 @@ const copy=async v=>{try{await navigator.clipboard.writeText(v);toast(t('copied'
 const modal=(title,body,btns=[],cls='')=>{const d=el('dialog',{class:cls},el('div',{class:'dlg-h'},el('h3',{},title),el('button',{class:'icon-btn',title:t('close'),onclick:()=>d.close()},ic('xmark'))),el('div',{class:'dlg-b'},body),btns.length?el('div',{class:'dlg-f'},...btns):null);d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();return d};
 const btn=(label,icon,f,c='')=>el('button',{class:'btn '+c,type:'button',onclick:f},icon?ic(icon):null,label?el('span',{},label):null);
 const seg=(opts,val,on)=>{const box=el('div',{class:'seg'});const draw=()=>box.replaceChildren(...opts.map(o=>el('button',{type:'button',class:o.v===val?'on':'',onclick:()=>{val=o.v;on(val);draw()}},o.i?ic(o.i):null,el('span',{},o.l))));draw();return box};
-function dd(opts,val,on){
+function dd(opts,val,on,mw=170){
 const lab=el('span',{class:'dd-l'});
 const b=el('button',{type:'button',class:'dd-b'},lab,ic('chevron-down','dd-c'));
 const wrap=el('div',{class:'dd'},b);
@@ -39,7 +37,7 @@ if(pop){close();return}
 pop=el('div',{class:'dd-p'},...opts.map(o=>el('button',{type:'button',class:'dd-o'+(o.v===val?' on':''),onclick:()=>{set(o.v);on(o.v);close()}},o.i?ic(o.i):null,el('span',{},o.l),o.v===val?ic('check','dd-k'):null)));
 wrap.append(pop);wrap.classList.add('open');
 const r=b.getBoundingClientRect();
-pop.style.minWidth=Math.max(r.width,170)+'px';
+pop.style.minWidth=Math.max(r.width,mw)+'px';
 const w=pop.offsetWidth,h=pop.offsetHeight;
 let left=r.left;if(left+w>innerWidth-8)left=innerWidth-8-w;
 let top=r.bottom+6;if(top+h>innerHeight-8)top=Math.max(8,r.top-6-h);
@@ -49,6 +47,66 @@ document.addEventListener('mousedown',out,true);document.addEventListener('keydo
 set(val);
 return wrap
 }
+
+const parseDT=(s,base)=>{
+s=String(s).trim().replace(/[٠-٩]/g,c=>c.charCodeAt(0)-1632).replace(/[۰-۹]/g,c=>c.charCodeAt(0)-1776);
+const m=s.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})(?:\s*[-–,T]?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|ص|م)?)?$/i);
+if(!m)return null;
+const y=+m[1],mo=+m[2],d=+m[3];
+let h=base.getHours(),mi=base.getMinutes();
+if(m[4]!==undefined){
+h=+m[4];mi=m[5]!==undefined?+m[5]:0;
+if(m[6]){if(h<1||h>12)return null;h=h%12+(/pm|م/i.test(m[6])?12:0)}else if(h>23)return null;
+if(mi>59)return null
+}
+const r=new Date(y,mo-1,d,h,mi,0,0);
+return r.getFullYear()===y&&r.getMonth()===mo-1&&r.getDate()===d?r:null
+};
+function dtField(init,onChange){
+const input=el('input',{dir:'ltr',autocomplete:'off',placeholder:'YYYY/MM/DD - hh:mm '+t('pm'),value:init?fmtDT(init):''});
+let cur=init?new Date(init):null,vw=new Date(cur||Date.now()),open=false;
+vw.setDate(1);
+const panel=el('div',{class:'cal',hidden:true});
+const toggle=el('button',{type:'button',class:'icon-btn',title:t('cal_open'),onclick:()=>{open=!open;panel.hidden=!open;toggle.classList.toggle('on',open);if(open)draw()}},ic('calendar-days'));
+const wrap=el('div',{class:'dtf'},el('div',{class:'inp-row'},input,toggle),panel);
+const rtl=LANG==='ar';
+const setCur=(d,keep)=>{cur=d;if(d){vw=new Date(d.getFullYear(),d.getMonth(),1)}if(!keep)input.value=d?fmtDT(d):'';input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()};
+function draw(){
+const loc=(rtl?'ar':'en')+'-u-nu-latn';
+const mon=new Intl.DateTimeFormat(loc,{month:'long'}).format(vw);
+const ws=rtl?6:0,today=new Date();
+const first=new Date(vw.getFullYear(),vw.getMonth(),1);
+const lead=(first.getDay()-ws+7)%7;
+const days=[];
+for(let i=0;i<42;i++){const d=new Date(vw.getFullYear(),vw.getMonth(),1-lead+i);days.push(d)}
+const same=(x,y)=>y&&x.getFullYear()===y.getFullYear()&&x.getMonth()===y.getMonth()&&x.getDate()===y.getDate();
+const wd=Array.from({length:7},(_,i)=>new Intl.DateTimeFormat(loc,{weekday:'short'}).format(new Date(2024,0,7+(ws+i)%7)));
+const nav=(n,icn,k)=>el('button',{type:'button',class:'icon-btn',title:t(k),onclick:()=>{vw=new Date(vw.getFullYear(),vw.getMonth()+n,1);draw()}},ic(icn));
+const grid=el('div',{class:'cal-g'},
+...wd.map(w=>el('span',{class:'cal-w'},w)),
+...days.map(d=>el('button',{type:'button',class:'cal-d'+(d.getMonth()!==vw.getMonth()?' o':'')+(same(d,today)?' td':'')+(same(d,cur)?' on':''),onclick:()=>{const b=cur||new Date();setCur(new Date(d.getFullYear(),d.getMonth(),d.getDate(),b.getHours(),b.getMinutes(),0,0))}},d.getDate())));
+const b=cur||new Date();
+const h12=b.getHours()%12||12,pm=b.getHours()>=12;
+const upd=(h,mi,p)=>{const x=cur?new Date(cur):new Date(b);x.setHours((h%12)+(p?12:0),mi,0,0);if(!cur){x.setFullYear(b.getFullYear(),b.getMonth(),b.getDate())}setCur(x)};
+const hd=dd(Array.from({length:12},(_,i)=>({v:i+1,l:p2(i+1)})),h12,v=>upd(v,b.getMinutes(),pm),78);
+const md=dd(Array.from({length:60},(_,i)=>({v:i,l:p2(i)})),b.getMinutes(),v=>upd(h12,v,pm),78);
+const ap=seg([{v:false,l:t('am')},{v:true,l:t('pm')}],pm,v=>upd(h12,b.getMinutes(),v));
+panel.dir=rtl?'rtl':'ltr';
+panel.replaceChildren(
+el('div',{class:'cal-h'},nav(-1,rtl?'chevron-right':'chevron-left','cal_prev'),el('b',{class:'cal-t'},mon+' '+vw.getFullYear()),nav(1,rtl?'chevron-left':'chevron-right','cal_next')),
+grid,
+el('div',{class:'tm'},hd,el('b',{},':'),md,ap))
+}
+input.addEventListener('input',()=>{
+const v=input.value.trim();
+if(!v){cur=null;input.classList.remove('bad');onChange&&onChange(null);if(open)draw();return}
+const d=parseDT(v,cur||new Date());
+if(d){cur=d;vw=new Date(d.getFullYear(),d.getMonth(),1);input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()}else input.classList.add('bad')
+});
+input.addEventListener('blur',()=>{if(cur&&!input.classList.contains('bad'))input.value=fmtDT(cur)});
+return{el:wrap,set:d=>setCur(d),get:()=>{const v=input.value.trim();if(!v)return{ok:true,d:null};const d=parseDT(v,cur||new Date());return d?{ok:true,d}:{ok:false}}}
+}
+const dchips=(vals,f)=>el('div',{class:'chips'},...vals.map(n=>el('button',{type:'button',class:'chip',onclick:()=>{if(!n){f.set(null);return}const d=new Date();d.setSeconds(0,0);d.setDate(d.getDate()+n);f.set(d)}},n===0?ic('infinity'):t('d_short',n))));
 const chips=(vals,input)=>el('div',{class:'chips'},...vals.map(v=>el('button',{type:'button',class:'chip',onclick:()=>{input.value=v}},v===0?ic('infinity'):v)));
 const meter=(p,c='')=>{const i=el('i');i.style.width=Math.max(0,Math.min(100,p))+'%';return el('div',{class:'meter '+c},i)};
 const liveDot=on=>el('span',{class:'dot'+(on?' live':''),title:t(on?'live_on':'live_off')});
@@ -132,7 +190,7 @@ el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
 el('td',{},pill(SC[a.status],t('st_'+a.status))),
 el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active)),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
-el('td',{},el('div',{},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
+el('td',{},el('div',{class:'dtv'},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
 el('td',{},el('div',{class:'acts'},
 el('button',{class:'icon-btn',title:t('a_info'),onclick:()=>infoDlg(a.name)},ic('circle-info')),
 el('button',{class:'icon-btn',title:t('a_edit'),onclick:()=>accDlg(a)},ic('pen-to-square')),
@@ -174,8 +232,9 @@ el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'liv
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
-el('div',{class:'kv'},el('span',{},ic('calendar-plus'),t('c_created')),el('b',{},dt(r.created))),
-el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{},dt(r.expires)+' · '+left(r.expires))));
+el('div',{class:'kv'},el('span',{},ic('calendar-plus'),t('c_created')),el('b',{class:'dtv'},dt(r.created))),
+el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{class:'dtv'},dt(r.expires))),
+el('div',{class:'kv'},el('span',{},ic('hourglass-half'),t('c_left')),el('b',{},left(r.expires))));
 const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
 const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy'))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
 modal(t('i_title',n),el('div',{},head,warn,...items))
@@ -190,7 +249,10 @@ const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',tr
 const name=el('input',{placeholder:'user1',maxlength:20,autocomplete:'off',dir:'ltr',value:ed?a.name:''});
 if(ed)name.disabled=true;
 const secret=el('input',{autocomplete:'off',dir:'ltr',placeholder:ed?t('f_keep'):t('f_auto')});
-const days=el('input',{type:'number',min:0,placeholder:ed?t('f_keep'):'',value:ed?'':30});
+const org=ed&&a.expires?new Date(a.expires*1000):null;
+if(org)org.setSeconds(0,0);
+const startD=ed?org:(()=>{const n=new Date();n.setSeconds(0,0);return n})();
+const expF=dtField(startD);
 const quota=el('input',{type:'number',min:0,step:'any',value:ed&&a.quota?+(a.quota/GB).toFixed(3):0});
 const note=el('input',{maxlength:100,value:ed?a.note:''});
 const genName=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{name.value='u'+rnd(6).toLowerCase()}},ic('dice'));
@@ -216,14 +278,16 @@ const form=el('div',{class:'form'},
 ed?null:boxKind,boxProto,boxTransport,boxTls,tlsHint,
 field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
-el('div',{class:'two'},
-el('div',{class:'f'},el('span',{},t('f_days')),days,chips(ed?[30,90,365,0]:[7,30,90,365,0],days)),
-el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota))),
+el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],expF),el('small',{class:'muted'},t('f_exp_hint'))),
+el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota)),
 field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
 btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
-const b={secret:secret.value,days:days.value,quota_gb:quota.value,note:note.value,tls:st.tls,transport:st.transport};
+const x=expF.get();
+if(!x.ok){toast(t('e_bad_date'));return}
+const b={secret:secret.value,quota_gb:quota.value,note:note.value,tls:st.tls,transport:st.transport};
+if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(x.d.getTime()/1000):0;
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
 else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/accounts',{...b,proto,name:name.value});d.close();await loadAcc();drawRows();infoDlg(r.name)}
@@ -249,7 +313,7 @@ const showDom=r=>res.replaceChildren(...[
 kv(t('dm_current'),r.domain||t('dm_none')),
 kv(t('dm_server_ip'),r.server_ip||'—'),
 kv(t('dm_dns'),r.dns.length?r.dns.join(', '):'—',r.candidate?pill(r.match?'ok':'bad',r.match?t('dm_match'):t('dm_nomatch')):null),
-kv(t('dm_cert'),r.cert?t('dm_cert_days',r.cert.days_left)+' ('+dt(r.cert.expires)+')':t('dm_cert_none')),
+kv(t('dm_cert'),r.cert?t('dm_cert_days',r.cert.days_left)+' ('+dtd(r.cert.expires)+')':t('dm_cert_none')),
 r.candidate&&!r.match?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',r.candidate,r.server_ip||'—')):null].filter(Boolean));
 const verify=async(quiet)=>{try{const r=await api('GET','/api/domain'+(dom.value.trim()?'?d='+encodeURIComponent(dom.value.trim().toLowerCase()):''));showDom(r);if(!quiet)toast(t('dm_checked'))}catch(e){terr(e)}};
 verify(true);
