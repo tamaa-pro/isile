@@ -173,6 +173,7 @@ el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'liv
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
+el('div',{class:'kv'},el('span',{},ic('calendar-plus'),t('c_created')),el('b',{},dt(r.created))),
 el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{},dt(r.expires)+' · '+left(r.expires))));
 const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
 const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy'))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));

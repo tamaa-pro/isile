@@ -23,7 +23,7 @@ const box=$('#pub');
 if(NF){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('circle-exclamation'),el('div',{},t('p_not_found'))));return}
 if(!D){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('spinner','fa-spin')));return}
 const a=D,used=a.up+a.down,now=Date.now()/1000;
-const tlsTag=a.proto==='ssh'?'80 + 443':a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
+const tlsTag=a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
 const pc=a.quota?used/a.quota*100:0;
 let vp=null;
 if(a.expires&&a.created&&a.expires>a.created)vp=Math.max(0,Math.min(100,(a.expires-now)/(a.expires-a.created)*100));
@@ -40,6 +40,7 @@ a.quota?meter(pc,pc>90?'bad':''):null,
 a.quota?el('div',{class:'muted sm'},t('p_left_tr')+': '+bytes(Math.max(0,a.quota-used))+' · '+pc.toFixed(1)+'%'):el('div',{class:'muted sm'},t('unlimited')),
 el('div',{class:'muted sm ltr'},'↓ '+bytes(a.down)+'  ↑ '+bytes(a.up))),
 el('div',{class:'pub-sec'},
+kv('calendar-plus',t('c_created'),dt(a.created)),
 kv('clock',t('c_expiry'),dt(a.expires)),
 vp!==null?meter(vp,vp<10?'bad':''):null,
 el('div',{class:'muted sm'},t('p_validity')+': '+left(a.expires))),
