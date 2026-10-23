@@ -95,7 +95,8 @@ const row1=el('div',{class:'grid g4'},
 tile('microchip','c1',t('d_cpu'),s.cpu.toFixed(1)+'%',t('d_cores',s.cores)+' · '+t('d_load')+' '+s.load[0].toFixed(2),spark(H.cpu,'s1',100)),
 tile('memory','c2',t('d_ram'),ramP.toFixed(1)+'%',bytes(s.mem_used)+' / '+bytes(s.mem_total),spark(H.ram,'s2',100)),
 tile('hard-drive','c3',t('d_disk'),diskP.toFixed(1)+'%',bytes(s.disk_used)+' / '+bytes(s.disk_total),meter(diskP,diskP>90?'bad':'')),
-tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+bytes(rx)+'/s'),'↑ '+bytes(tx)+'/s',spark(H.rx,'s4')));
+tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+bytes(rx)+'/s'),'↑ '+bytes(tx)+'/s',spark(H.rx,'s4')),
+portsTile(s.ports||[]));
 const cap=s.cap_gb*GB,used=s.month_used,pc=cap?used/cap*100:0;
 const trf=el('div',{class:'tile wide'},
 el('div',{class:'tile-h'},el('span',{class:'ico c9'},ic('server')),el('span',{class:'tile-t'},t('d_server_traffic'))),
@@ -116,10 +117,14 @@ const expL=el('div',{class:'list'},...(exp.length?exp.map(a=>el('div',{class:'li
 const sv=el('div',{class:'svc'},...Object.entries(s.services).map(([k,v])=>el('span',{class:'pill '+(v?'ok':'bad')},ic(v?'circle-check':'circle-xmark'),k)));
 $('#view').replaceChildren(row1,trf,row2,el('div',{class:'grid g2'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid g2'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv)))
 }
+function portsTile(P){
+const on=P.filter(p=>p.listening).length,tot=P.filter(p=>p.enabled).length;
+return tile('plug','c6',t('pt_title'),on+' / '+tot,t('pt_sub'),el('div',{class:'ports'},...P.map(p=>el('div',{class:'pt'},el('b',{class:'ltr'},p.port),el('span',{class:'muted'},t('pt_'+p.k)),pill(p.listening?'ok':p.enabled?'bad':'off',t(p.listening?'pt_listen':p.enabled?'pt_closed':'pt_off'))))))
+}
 function accRow(a){
 const used=a.up+a.down;
 const act=a.status==='active';
-const tlsTag=a.proto==='ssh'?'80 + 443':a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
+const tlsTag=a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
 return el('tr',{},
 el('td',{},el('b',{},a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(a.proto),el('div',{class:'muted sm'},tlsTag)),
@@ -169,7 +174,7 @@ r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
 el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{},dt(r.expires)+' · '+left(r.expires))));
-const warn=(!r.tls_on&&r.proto!=='ssh'&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
+const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
 const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy'))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
 modal(t('i_title',n),el('div',{},head,warn,...items))
 }catch(e){terr(e)}
@@ -179,7 +184,7 @@ if(!S){try{await loadStats()}catch(e){}}
 const ed=!!a;
 const tlsOn=!S||S.tls_on!==false;
 const forced=!tlsOn&&!ed;
-const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',tls:forced?'plain':ed?a.tls:'tls'};
+const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',tls:forced?'plain':ed?a.tls:'both'};
 const name=el('input',{placeholder:'user1',maxlength:20,autocomplete:'off',dir:'ltr',value:ed?a.name:''});
 if(ed)name.disabled=true;
 const secret=el('input',{autocomplete:'off',dir:'ltr',placeholder:ed?t('f_keep'):t('f_auto')});
@@ -191,7 +196,6 @@ const genSec=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclic
 const kindSeg=seg([{v:'ssh',l:'SSH',i:'terminal'},{v:'v2',l:'V2Ray',i:'bolt'}],st.kind,v=>{st.kind=v;sync()});
 const protoSeg=seg([{v:'vless',l:'VLESS',i:'bolt'},{v:'vmess',l:'VMess',i:'diagram-project'},{v:'trojan',l:'Trojan',i:'shield-halved'}],st.proto,v=>{st.proto=v;sync()});
 const tlsSeg=seg([{v:'tls',l:t('tls_tls'),i:'lock'},{v:'plain',l:t('tls_plain'),i:'lock-open'},{v:'both',l:t('tls_both'),i:'layer-group'}],st.tls,v=>{st.tls=v});
-const sshHint=el('div',{class:'hint'},ic('circle-info'),t('f_ssh_hint'));
 const tlsHint=el('div',{class:'hint'},ic('triangle-exclamation'),t('tls_unavailable'));
 const secLabel=el('span',{});
 const boxProto=field(t('f_proto'),protoSeg);
@@ -199,11 +203,11 @@ const boxTls=field(t('f_tls'),tlsSeg,t('f_tls_hint'));
 const boxKind=field(t('f_type'),kindSeg);
 function sync(){
 const v2=st.kind==='v2';
-boxProto.hidden=!v2||ed;boxTls.hidden=!v2||forced;tlsHint.hidden=!v2||!forced;sshHint.hidden=v2;
+boxProto.hidden=!v2||ed;boxTls.hidden=forced;tlsHint.hidden=!forced;
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
-ed?null:boxKind,boxProto,boxTls,tlsHint,sshHint,
+ed?null:boxKind,boxProto,boxTls,tlsHint,
 field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'two'},
@@ -213,7 +217,7 @@ field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
 btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
-const b={secret:secret.value,days:days.value,quota_gb:quota.value,note:note.value,tls:st.kind==='v2'?st.tls:'both'};
+const b={secret:secret.value,days:days.value,quota_gb:quota.value,note:note.value,tls:st.tls};
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
 else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/accounts',{...b,proto,name:name.value});d.close();await loadAcc();drawRows();infoDlg(r.name)}
