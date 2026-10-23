@@ -128,7 +128,7 @@ dialog::backdrop{background:rgba(5,8,20,.68);backdrop-filter:blur(3px)}
 .kvs{display:grid;gap:12px}
 .item{margin-bottom:12px}
 .item-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--card2);color:var(--tx);border:1px solid var(--line);padding:10px 20px;border-radius:12px;box-shadow:var(--shadow);z-index:99;animation:rise .25s ease}
+.toast{position:fixed;inset:auto auto 24px 50%;margin:0;overflow:visible;transform:translateX(-50%);background:var(--card2);color:var(--tx);border:1px solid var(--line);padding:10px 20px;border-radius:12px;box-shadow:var(--shadow);z-index:99;animation:rise .25s ease}
 .login{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:30px 28px;width:min(390px,100%);display:grid;gap:16px;box-shadow:var(--shadow)}
 .login h2{text-align:center}
 .login h2 small{color:var(--mut);font-size:13px}

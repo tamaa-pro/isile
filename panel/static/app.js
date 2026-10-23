@@ -15,7 +15,7 @@ const dt=ts=>ts?new Date(ts*1000).toLocaleDateString('en-GB'):t('unlimited');
 const left=ts=>{if(!ts)return t('unlimited');const d=Math.ceil((ts*1000-Date.now())/864e5);return d>0?t('days_n',d):t('ended')};
 const upt=s=>{const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?t('d_short',d)+' ':'')+t('h_short',h)+' '+t('m_short',m)};
 const rnd=n=>{const c='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=new Uint32Array(n);crypto.getRandomValues(a);return Array.from(a,x=>c[x%c.length]).join('')};
-const toast=m=>{const x=el('div',{class:'toast'},m);document.body.append(x);setTimeout(()=>x.remove(),3500)};
+const toast=m=>{const x=el('div',{class:'toast',popover:'manual'},m);document.body.append(x);try{x.showPopover()}catch(e){}setTimeout(()=>x.remove(),3500)};
 const terr=e=>{if(e.message==='unauthorized')return;const k='e_'+e.message;const m=tx(k);toast(m!==k?m+(e.detail?': '+e.detail:''):(e.detail||e.message))};
 const field=(l,i,h)=>el('label',{class:'f'},el('span',{},l),i,h?el('small',{class:'muted'},h):null);
 const kv=(l,v,x)=>el('div',{class:'kv'},el('span',{},l),el('b',{class:'ltr'},v),x);
