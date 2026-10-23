@@ -85,11 +85,13 @@ fi
 STEP="installing packages"
 echo "[1/8] Installing packages"
 L apt-get update -y
-L apt-get install -y nginx certbot python3 python3-venv python3-pip curl unzip nftables ufw openssl ca-certificates
+L apt-get install -y nginx certbot python3 python3-venv python3-pip curl unzip nftables ufw openssl ca-certificates stunnel4
+STUNNEL_BIN="$(command -v stunnel4 || command -v stunnel || true)"
+[ -n "$STUNNEL_BIN" ] || die "stunnel was not installed (package stunnel4)"
 STEP="creating users and directories"
 getent group vpnusers >/dev/null || groupadd vpnusers
 id xray >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin xray
-install -d -m755 "$APP" /usr/local/etc/xray /var/www/certbot
+install -d -m755 "$APP" /usr/local/etc/xray /var/www/certbot /etc/vpnpanel
 install -d -m700 "$DATA"
 STEP="downloading panel files"
 echo "[2/8] Downloading panel files"
@@ -162,6 +164,7 @@ STEP="issuing TLS certificate"
 if [ -n "$DOMAIN" ]; then echo "[6/8] TLS certificate"; else echo "[6/8] No domain, skipping TLS certificate"; fi
 if [ -n "$DOMAIN" ]; then
 if [ ! -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+systemctl stop vpnmux vpnstunnel >>"$LOG" 2>&1 || true
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/vpnpanel.conf <<EOT
 server {
@@ -182,7 +185,7 @@ L certbot "${CB[@]}" || die "certificate issuance failed (check the DNS A record
 [ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] || die "certificate file was not created"
 fi
 install -d /etc/letsencrypt/renewal-hooks/deploy
-printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
+printf '#!/bin/sh\nsystemctl reload nginx\nsystemctl try-restart vpnstunnel\n' > /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 chmod 755 /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 systemctl enable --now certbot.timer >>"$LOG" 2>&1 || true
 fi
@@ -226,6 +229,44 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 EOT
+cat > /etc/systemd/system/vpnmux.service <<EOT
+[Unit]
+Description=SSH SSL multiplexer (ports 80 and 443)
+After=network.target
+[Service]
+User=nobody
+Group=nogroup
+Environment=SSH_PORT=$SSH_PORT
+ExecStart=/usr/bin/python3 $APP/panel/sshmux.py
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
+EOT
+cat > /etc/systemd/system/vpnstunnel.service <<EOT
+[Unit]
+Description=TLS front on port 443 (stunnel)
+After=network.target vpnmux.service
+ConditionPathExists=/etc/vpnpanel/stunnel.conf
+[Service]
+ExecStart=$STUNNEL_BIN /etc/vpnpanel/stunnel.conf
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
+EOT
 cat > /etc/systemd/system/vpnpanel.service <<EOT
 [Unit]
 Description=VPN Panel
@@ -257,14 +298,23 @@ if [ -n "$DOMAIN" ]; then L ufw allow 443/tcp; fi
 L ufw allow 2080/tcp
 L ufw --force enable
 L systemctl daemon-reload
-L systemctl enable vpnpanel vpnbridge xray
+L systemctl enable vpnpanel vpnbridge vpnmux xray
 L systemctl restart vpnbridge
 L systemctl restart vpnpanel
 sleep 3
 L systemctl restart xray
-L systemctl reload nginx
+L systemctl restart nginx
+L systemctl restart vpnmux
+if [ -s /etc/vpnpanel/stunnel.conf ]; then
+L systemctl enable vpnstunnel
+L systemctl restart vpnstunnel
+else
+systemctl disable --now vpnstunnel >>"$LOG" 2>&1 || true
+fi
 STEP="verifying services"
-for s in vpnpanel vpnbridge xray nginx; do
+SVCS="vpnpanel vpnbridge vpnmux xray nginx"
+if [ -s /etc/vpnpanel/stunnel.conf ]; then SVCS="$SVCS vpnstunnel"; fi
+for s in $SVCS; do
 ok=0
 for i in $(seq 1 20); do
 if systemctl is-active --quiet "$s"; then ok=1; break; fi
@@ -275,6 +325,35 @@ journalctl -u "$s" -n 12 --no-pager >>"$LOG" 2>&1 || true
 die "service $s is not running"
 fi
 done
+STEP="verifying connection paths"
+CODE=000
+for i in $(seq 1 15); do
+CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1/ || true)"
+[ "$CODE" = 404 ] && break
+sleep 1
+done
+if [ "$CODE" != 404 ]; then
+journalctl -u vpnmux -n 12 --no-pager >>"$LOG" 2>&1 || true
+die "port 80 does not answer through the multiplexer (HTTP $CODE)"
+fi
+if [ -s /etc/vpnpanel/stunnel.conf ]; then
+CODE=000
+for i in $(seq 1 15); do
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/" || true)"
+[ "$CODE" = 404 ] && break
+sleep 1
+done
+if [ "$CODE" != 404 ]; then
+journalctl -u vpnstunnel -n 12 --no-pager >>"$LOG" 2>&1 || true
+die "port 443 does not answer through stunnel (HTTP $CODE)"
+fi
+fi
+SSHB="$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/80; head -c 4 <&3' 2>/dev/null || true)"
+[ "$SSHB" = "SSH-" ] || echo "Warning: direct SSH on port 80 did not answer, SSH SSL without TLS may not work (see $LOG)"
+if [ -s /etc/vpnpanel/stunnel.conf ]; then
+SSHB="$( (sleep 4) | timeout 10 openssl s_client -quiet -connect 127.0.0.1:443 -servername "$DOMAIN" 2>/dev/null | head -c 4 || true)"
+[ "$SSHB" = "SSH-" ] || echo "Warning: direct SSH over TLS on port 443 did not answer, SSH SSL with TLS may not work (see $LOG)"
+fi
 if [ -n "$DOMAIN" ]; then SCHEME=https; PUB="$DOMAIN"; else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
 CODE=000
 for i in $(seq 1 20); do
@@ -302,9 +381,11 @@ echo " Password  : $ADMIN_PASS"
 echo "--------------------------------------------------"
 if [ -n "$DOMAIN" ]; then
 echo " Open ports 80, 443, 2080 and your SSH port in the cloud firewall."
+echo " SSH SSL: direct SSH on 80 (no TLS) and 443 (TLS via stunnel)."
 else
 echo " No domain: the panel and connections use plain HTTP without TLS."
 echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
+echo " SSH SSL: direct SSH on 80 (no TLS). TLS needs a domain."
 echo " You can add a domain later from the panel Settings."
 fi
 echo " Type  isile  to open the management menu:"
