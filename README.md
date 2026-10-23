@@ -6,7 +6,7 @@
 
 | البروتوكول | بدون TLS (المنفذ 80) | مع TLS (المنفذ 443) |
 |---|---|---|
-| SSH + SSL (اتصال مباشر بدون WebSocket) | ✔ | ✔ |
+| SSH + SSL (اتصال مباشر بدون ws) | ✔ | ✔ |
 | SSH + WebSocket | ✔ | ✔ |
 | VLESS + WebSocket | ✔ | ✔ |
 | VMess + WebSocket | ✔ | ✔ |
