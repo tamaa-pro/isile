@@ -296,6 +296,16 @@ else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/a
 ed?btn(t('regen'),'rotate',async()=>{if(await patch(a.name,{regen:true},t('regen_done')))d.close()}):null,
 ed?btn(t('reset_traffic'),'eraser',async()=>{if(await patch(a.name,{reset:true},t('reset_done')))d.close()}):null],'wide')
 }
+function dlLog(k){const x=el('a',{href:'/api/logs/'+k+'/download'});document.body.append(x);x.click();x.remove()}
+async function clearLog(k,after){
+ask(t('lg_confirm',t('lg_'+k)),t('lg_clear'),async()=>{try{await api('POST','/api/logs/'+k+'/clear');toast(t('lg_cleared'));if(after)await after()}catch(e){terr(e);return false}})
+}
+async function logDlgView(k,after){
+const pre=el('pre',{class:'log big'},'...');
+const load=async()=>{try{const r=await api('GET','/api/logs/'+k+'?n=500');pre.textContent=r.text||t('lg_empty');pre.scrollTop=pre.scrollHeight}catch(e){terr(e)}};
+const d=modal(t('lg_'+k),pre,[btn(t('lg_refresh'),'rotate',load),btn(t('lg_download'),'download',()=>dlLog(k)),btn(t('lg_clear'),'eraser',()=>clearLog(k,async()=>{await load();if(after)await after()}),'dgr')],'wide');
+await load()
+}
 async function viewSettings(){
 const s=await api('GET','/api/settings');
 const th=document.documentElement.dataset.theme;
@@ -337,6 +347,20 @@ try{await api('POST','/api/system/uninstall',{password:pw.value})}catch(e){terr(
 const ov=overlay(t('sys_w_uninstall'));
 setTimeout(()=>ov.replaceChildren(el('div',{class:'ovl-b'},ic('circle-check','ovl-i ok-i'),el('div',{class:'ovl-t'},t('sys_removed')))),9000)
 },{extra:pw});
+const bn=el('textarea',{rows:5,maxlength:2000,dir:'auto',placeholder:t('bn_ph')});
+bn.value=s.banner||'';
+const saveBn=async(v)=>{try{await api('POST','/api/settings',{banner:v});if(v==='')bn.value='';toast(t('bn_saved'))}catch(e){terr(e)}};
+const lgBox=el('div',{class:'kvs'},el('div',{class:'empty'},ic('spinner','fa-spin')));
+const fillLogs=async()=>{
+try{
+const r=await api('GET','/api/logs');
+lgBox.replaceChildren(...(r.items.length?r.items.map(i=>el('div',{class:'srow'},el('span',{class:'ico c2'},ic(i.kind==='file'?'file-lines':'scroll')),el('div',{class:'srow-t'},el('b',{},t('lg_'+i.id)),el('div',{class:'muted sm'},i.kind==='file'?bytes(i.size):t('lg_journal'))),el('div',{class:'acts'},
+el('button',{class:'icon-btn',title:t('lg_open'),onclick:()=>logDlgView(i.id,fillLogs)},ic('eye')),
+el('button',{class:'icon-btn',title:t('lg_download'),onclick:()=>dlLog(i.id)},ic('download')),
+el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.id,fillLogs)},ic('eraser'))))):[el('div',{class:'empty'},t('lg_none'))]),el('div',{class:'muted sm'},t('lg_unit_note')))
+}catch(e){terr(e)}
+};
+fillLogs();
 $('#view').replaceChildren(el('div',{class:'grid g2'},
 panel('palette',t('s_appearance'),el('div',{class:'form'},
 field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],th,v=>{localStorage.setItem('theme',v);document.documentElement.dataset.theme=v})),
@@ -349,6 +373,8 @@ field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
 el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_reset'),'eraser',resetMonth)))),
 panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}))),
+panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),bn,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn(bn.value),'pri'),btn(t('bn_clear'),'eraser',()=>saveBn(''))))),
+panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs'},
 kv(t('sys_version'),VERSION),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
