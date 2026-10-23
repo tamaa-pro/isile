@@ -2,6 +2,7 @@ import os,sys,re,json,time,uuid,hmac,base64,socket,secrets,shutil,sqlite3,tempfi
 from datetime import timedelta,datetime,timezone
 from shlex import quote as shq
 from urllib.parse import quote
+from urllib.request import urlopen,Request
 from flask import Flask,request,session,jsonify,render_template,redirect,Response
 from werkzeug.security import generate_password_hash,check_password_hash
 BASE=os.path.dirname(os.path.abspath(__file__))
@@ -1066,6 +1067,36 @@ def delete(name):
         finally:
             c.close()
     return jsonify(ok=True)
+GEO=[0,False]
+def geo_lookup(ip):
+    for url in ("https://ipwho.is/%s"%ip,"https://ipapi.co/%s/json/"%ip):
+        try:
+            with urlopen(Request(url,headers={"User-Agent":"isile"}),timeout=5) as r:
+                cc=str(json.loads(r.read(65536).decode("utf-8","replace")).get("country_code","")).upper()
+            if re.match(r"^[A-Z]{2}$",cc):
+                return cc
+        except Exception:
+            pass
+    return ""
+def geo_job(ip):
+    try:
+        cc=geo_lookup(ip)
+        if cc:
+            puts({"geo_ip":ip,"geo_cc":cc})
+    finally:
+        GEO[0]=time.time()
+        GEO[1]=False
+def server_cc():
+    ip=get("server_ip","")
+    if not ip:
+        return ""
+    g=gets("geo_ip","geo_cc")
+    if g.get("geo_ip")==ip and g.get("geo_cc"):
+        return g["geo_cc"]
+    if not GEO[1] and time.time()-GEO[0]>600:
+        GEO[1]=True
+        threading.Thread(target=geo_job,args=(ip,),daemon=True).start()
+    return ""
 @app.get("/api/public/<name>")
 def public_api(name):
     name=name.lower()
@@ -1078,7 +1109,7 @@ def public_api(name):
         return err("not_found",404)
     act=r["status"]=="active" and time.time()-ACTIVE.get(name,0)<ACTIVE_TTL
     spu,spd=speed_of(name) if act else (0,0)
-    return jsonify(name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()))
+    return jsonify(name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()),cc=server_cc())
 @app.get("/<name>")
 def public_page(name):
     name=name.lower()
