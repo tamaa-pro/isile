@@ -763,7 +763,7 @@ def info(name):
         items.insert(0,{"k":"page","value":page_url(n),"rows":1})
     act=r["status"]=="active" and time.time()-ACTIVE.get(n,0)<ACTIVE_TTL
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],expires=r["expires"],proto=p,tls=r["tls"],tls_on=t_on)
+    return jsonify(items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,tls=r["tls"],tls_on=t_on)
 def parse_common(d,creating):
     try:
         out={}
