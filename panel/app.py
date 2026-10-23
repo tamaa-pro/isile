@@ -57,7 +57,6 @@ CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,se
     cols={r["name"] for r in c.execute("PRAGMA table_info(accounts)")}
     if "tls" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN tls TEXT NOT NULL DEFAULT 'tls'")
-    c.execute("UPDATE accounts SET tls='both' WHERE proto='ssh' AND tls<>'both'")
     c.commit()
     c.close()
     os.chmod(DBP,0o600)
@@ -516,6 +515,39 @@ def month_info():
     basis=s.get("cap_basis","total")
     used=max(0,(tx if basis=="out" else rx+tx)+off)
     return {"month_rx":rx,"month_tx":tx,"month_used":used,"cap_gb":float(s.get("cap_gb",0) or 0),"cap_basis":basis}
+SSHP={"v":None}
+def ssh_port():
+    if SSHP["v"] is None:
+        p=22
+        try:
+            m=re.search(r"^port (\d+)",sh(["sshd","-T"]).stdout,re.M)
+            if m:
+                p=int(m.group(1))
+        except Exception:
+            pass
+        SSHP["v"]=p
+    return SSHP["v"]
+def listening_ports():
+    out=set()
+    for f in ("/proc/net/tcp","/proc/net/tcp6"):
+        try:
+            with open(f) as fh:
+                for l in list(fh)[1:]:
+                    p=l.split()
+                    if len(p)<4 or p[3]!="0A":
+                        continue
+                    a,_,pt=p[1].rpartition(":")
+                    if a in ("0100007F","00000000000000000000000001000000"):
+                        continue
+                    out.add(int(pt,16))
+        except OSError:
+            pass
+    return out
+def ports_info():
+    ls=listening_ports()
+    t=tls_on()
+    rows=[("ssh",ssh_port(),True),("http",80,True),("https",443,t),("panel",2080,True)]
+    return [{"k":k,"port":p,"enabled":en,"listening":en and p in ls} for k,p,en in rows]
 @app.get("/api/stats")
 @auth
 def stats():
@@ -533,6 +565,7 @@ def stats():
     rx,tx=net_totals()
     o=dict(version=VERSION,cpu=cpu_pct(),cores=os.cpu_count() or 1,load=list(os.getloadavg()),mem_total=mem.get("MemTotal",0),mem_used=mem.get("MemTotal",0)-mem.get("MemAvailable",0),disk_total=du.total,disk_used=du.used,uptime=up,net_rx=rx,net_tx=tx,ts=time.time(),services=sv,domain=get("domain",""),host=host(),tls_on=tls_on())
     o.update(month_info())
+    o["ports"]=ports_info()
     return jsonify(o)
 def cert_info(dom):
     p="/etc/letsencrypt/live/%s/fullchain.pem"%dom
@@ -708,8 +741,10 @@ def info(name):
     items=[]
     p=r["proto"]
     if p=="ssh":
-        items=[{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2},{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
-        if t_on:
+        items=[{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+        if r["tls"] in ("plain","both"):
+            items.insert(0,{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
+        if t_on and r["tls"] in ("tls","both"):
             items.insert(0,{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
     else:
         for m in (MODES if r["tls"]=="both" else (r["tls"],)):
@@ -760,7 +795,7 @@ def create():
     pc=parse_common(d,True)
     if pc is None:
         return err("bad_values")
-    tls=d.get("tls","tls") if proto!="ssh" else "both"
+    tls=d.get("tls","both" if proto=="ssh" else "tls")
     if tls not in ("tls","plain","both"):
         return err("bad_values")
     sec=str(d.get("secret") or "").strip()
@@ -830,7 +865,7 @@ def edit(name):
                 sets["expires"]=int(time.time())+pc["days"]*86400 if pc["days"] else 0
             if "quota" in pc:
                 sets["quota"]=pc["quota"]
-            if d.get("tls") and r["proto"]!="ssh":
+            if d.get("tls"):
                 if d["tls"] not in ("tls","plain","both"):
                     return err("bad_values")
                 sets["tls"]=d["tls"]
