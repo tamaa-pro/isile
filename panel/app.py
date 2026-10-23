@@ -20,6 +20,7 @@ GB=1073741824
 V2=("vless","vmess","trojan")
 PROTOS=("ssh",)+V2
 MODES=("tls","plain")
+TRANSPORTS=("ws","ssl")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
@@ -57,6 +58,8 @@ CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,se
     cols={r["name"] for r in c.execute("PRAGMA table_info(accounts)")}
     if "tls" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN tls TEXT NOT NULL DEFAULT 'tls'")
+    if "transport" not in cols:
+        c.execute("ALTER TABLE accounts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ws'")
     c.commit()
     c.close()
     os.chmod(DBP,0o600)
@@ -557,7 +560,9 @@ def stats():
             k,v=l.split(":",1)
             mem[k]=int(v.split()[0])*1024
     du=shutil.disk_usage("/")
-    sv={s:sh(["systemctl","is-active","--quiet",s]).returncode==0 for s in ("xray","nginx","vpnbridge")}
+    sv={s:sh(["systemctl","is-active","--quiet",s]).returncode==0 for s in ("xray","nginx","vpnbridge","vpnmux")}
+    if tls_on():
+        sv["vpnstunnel"]=sh(["systemctl","is-active","--quiet","vpnstunnel"]).returncode==0
     sv["ssh"]=any(sh(["systemctl","is-active","--quiet",s]).returncode==0 for s in ("ssh","ssh.socket"))
     sv["panel"]=True
     with open("/proc/uptime") as f:
@@ -660,7 +665,7 @@ def domain_set():
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
-    e=start_job("restart","sleep 1; systemctl restart xray vpnbridge nginx; systemctl restart vpnpanel")
+    e=start_job("restart","sleep 1; systemctl restart xray vpnbridge nginx vpnmux; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel")
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
@@ -716,7 +721,7 @@ def lst():
     c=db()
     rows=[]
     for r in c.execute("SELECT * FROM accounts ORDER BY created DESC"):
-        o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls")}
+        o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls","transport")}
         o["active"]=r["status"]=="active" and time.time()-ACTIVE.get(r["name"],0)<ACTIVE_TTL
         o["sp_up"],o["sp_down"]=speed_of(r["name"]) if o["active"] else (0,0)
         rows.append(o)
@@ -740,7 +745,16 @@ def info(name):
     h=quote(n,safe="")
     items=[]
     p=r["proto"]
-    if p=="ssh":
+    if p=="ssh" and r["transport"]=="ssl":
+        want_tls=t_on and r["tls"] in ("tls","both")
+        if want_tls:
+            items.append({"k":"ssl_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
+        if r["tls"] in ("plain","both"):
+            items.append({"k":"ssl_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
+        if want_tls:
+            items.append({"k":"sni","value":dom,"rows":1})
+        items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+    elif p=="ssh":
         items=[{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
         if r["tls"] in ("plain","both"):
             items.insert(0,{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
@@ -763,7 +777,7 @@ def info(name):
         items.insert(0,{"k":"page","value":page_url(n),"rows":1})
     act=r["status"]=="active" and time.time()-ACTIVE.get(n,0)<ACTIVE_TTL
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,tls=r["tls"],tls_on=t_on)
+    return jsonify(items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on)
 def parse_common(d,creating):
     try:
         out={}
@@ -798,6 +812,11 @@ def create():
     tls=d.get("tls","both" if proto=="ssh" else "tls")
     if tls not in ("tls","plain","both"):
         return err("bad_values")
+    transport=d.get("transport","ws")
+    if transport not in TRANSPORTS:
+        return err("bad_values")
+    if proto!="ssh":
+        transport="ws"
     sec=str(d.get("secret") or "").strip()
     if proto in ("vless","vmess"):
         sec=sec.lower() or str(uuid.uuid4())
@@ -823,7 +842,7 @@ def create():
                 except RuntimeError as e:
                     return err("system",400,str(e))
             now=int(time.time())
-            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls) VALUES(?,?,?,?,?,?,?,?,'active',?)",(name,proto,sec,uid,now,now+pc["days"]*86400 if pc["days"] else 0,pc["quota"],note,tls))
+            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport) VALUES(?,?,?,?,?,?,?,?,'active',?,?)",(name,proto,sec,uid,now,now+pc["days"]*86400 if pc["days"] else 0,pc["quota"],note,tls,transport))
             c.commit()
             if proto=="ssh":
                 collect(c)
@@ -869,6 +888,10 @@ def edit(name):
                 if d["tls"] not in ("tls","plain","both"):
                     return err("bad_values")
                 sets["tls"]=d["tls"]
+            if d.get("transport") and r["proto"]=="ssh":
+                if d["transport"] not in TRANSPORTS:
+                    return err("bad_values")
+                sets["transport"]=d["transport"]
             if "note" in d:
                 sets["note"]=str(d.get("note") or "")[:100]
             if "manual" in d:
@@ -918,7 +941,7 @@ def public_api(name):
         return err("not_found",404)
     act=r["status"]=="active" and time.time()-ACTIVE.get(name,0)<ACTIVE_TTL
     spu,spd=speed_of(name) if act else (0,0)
-    return jsonify(name=r["name"],proto=r["proto"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()))
+    return jsonify(name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()))
 @app.get("/<name>")
 def public_page(name):
     name=name.lower()
