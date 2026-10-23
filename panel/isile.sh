@@ -81,7 +81,7 @@ fi
 done
 groupdel vpnusers >/dev/null 2>&1
 userdel xray >/dev/null 2>&1
-rm -f /etc/ssh/sshd_config.d/99-vpnpanel.conf
+rm -f /etc/ssh/sshd_config.d/99-vpnpanel.conf /etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf
 systemctl reload ssh >/dev/null 2>&1
 rm -f /etc/nginx/conf.d/vpnpanel.conf
 [ -e /etc/nginx/sites-available/default ] && ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default

@@ -2,7 +2,7 @@ import os,sys,re,json,time,uuid,hmac,base64,socket,secrets,shutil,sqlite3,tempfi
 from datetime import timedelta,datetime,timezone
 from shlex import quote as shq
 from urllib.parse import quote
-from flask import Flask,request,session,jsonify,render_template,redirect
+from flask import Flask,request,session,jsonify,render_template,redirect,Response
 from werkzeug.security import generate_password_hash,check_password_hash
 BASE=os.path.dirname(os.path.abspath(__file__))
 APPDIR=os.path.dirname(BASE)
@@ -11,6 +11,10 @@ DBP=DATA+"/panel.db"
 JOBF=DATA+"/job.json"
 RCF=DATA+"/job.rc"
 LOGF="/var/log/isile-install.log"
+BANNER_TXT="/etc/vpnpanel/banner.txt"
+BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
+BANNER_MAX=2000
+LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log")}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -594,7 +598,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on()}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"banner":get("banner","")}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -624,8 +628,133 @@ def settings_set():
         upd.update({"m_rx":0,"m_tx":0,"m_off":0})
     if "public_page" in d:
         upd["public_page"]="1" if d["public_page"] else "0"
+    if "banner" in d:
+        txt=clean_banner(d["banner"])
+        if txt is None:
+            return err("bad_values")
+        e=apply_banner(txt)
+        if e:
+            return err("system",400,e)
+        upd["banner"]=txt
     if upd:
         puts(upd)
+    return jsonify(ok=True)
+def clean_banner(v):
+    if not isinstance(v,str):
+        return None
+    v=v.replace("\r\n","\n").replace("\r","\n")
+    v="".join(ch for ch in v if ch in "\n\t" or ch>=" " and ch!="\x7f").strip()
+    return v if len(v)<=BANNER_MAX else None
+def apply_banner(txt):
+    old=None
+    try:
+        with open(BANNER_CONF) as f:
+            old=f.read()
+    except OSError:
+        pass
+    try:
+        if txt:
+            os.makedirs(os.path.dirname(BANNER_TXT),exist_ok=True)
+            with open(BANNER_TXT,"w",encoding="utf-8") as f:
+                f.write(txt+"\n")
+            os.chmod(BANNER_TXT,0o644)
+            with open(BANNER_CONF,"w") as f:
+                f.write("Match Group vpnusers\nBanner %s\n"%BANNER_TXT)
+        else:
+            for p in (BANNER_CONF,BANNER_TXT):
+                if os.path.exists(p):
+                    os.unlink(p)
+    except OSError as e:
+        return str(e)
+    r=sh(["sshd","-t"])
+    if r.returncode:
+        try:
+            if old is None:
+                if os.path.exists(BANNER_CONF):
+                    os.unlink(BANNER_CONF)
+            else:
+                with open(BANNER_CONF,"w") as f:
+                    f.write(old)
+        except OSError:
+            pass
+        return ((r.stderr or r.stdout or "").strip()[-300:]) or "sshd rejected the configuration"
+    sh(["systemctl","reload","ssh"])
+    return ""
+def log_sources():
+    out=[]
+    for k,(kind,src) in LOGS.items():
+        if kind=="file":
+            try:
+                out.append({"id":k,"kind":"file","size":os.path.getsize(src)})
+            except OSError:
+                pass
+        elif k!="stunnel" or (os.path.exists("/etc/vpnpanel/stunnel.conf") and os.path.getsize("/etc/vpnpanel/stunnel.conf")>0):
+            out.append({"id":k,"kind":"unit"})
+    return out
+def log_text(k,n,full=False):
+    kind,src=LOGS[k]
+    if kind=="file":
+        lim=10*1024*1024 if full else 262144
+        try:
+            with open(src,"rb") as f:
+                f.seek(0,2)
+                size=f.tell()
+                f.seek(max(0,size-lim))
+                data=f.read()
+        except OSError:
+            return ""
+        txt=data.decode("utf-8","replace")
+        if size>lim:
+            txt=txt.split("\n",1)[-1]
+        if not full:
+            txt="\n".join(txt.splitlines()[-n:])
+        return txt
+    args=["journalctl","--no-pager","-q","-o","short-iso","-n",str(n)]
+    for u in src:
+        args+=["-u",u]
+    since=get("logclr_"+k)
+    if since:
+        args+=["--since",time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(int(since)))]
+    try:
+        r=subprocess.run(args,capture_output=True,text=True,errors="replace",timeout=40)
+    except subprocess.TimeoutExpired:
+        return ""
+    return "\n".join(l for l in r.stdout.splitlines() if not l.startswith("-- "))
+@app.get("/api/logs")
+@auth
+def logs_list():
+    return jsonify(items=log_sources())
+@app.get("/api/logs/<k>")
+@auth
+def logs_view(k):
+    if k not in LOGS:
+        return err("not_found",404)
+    try:
+        n=max(10,min(2000,int(request.args.get("n",500))))
+    except ValueError:
+        n=500
+    return jsonify(text=log_text(k,n))
+@app.get("/api/logs/<k>/download")
+@auth
+def logs_download(k):
+    if k not in LOGS:
+        return err("not_found",404)
+    txt=log_text(k,50000,True)
+    name="isile-%s-%s.log"%(k,time.strftime("%Y%m%d-%H%M%S"))
+    return Response(txt+"\n",mimetype="text/plain; charset=utf-8",headers={"Content-Disposition":'attachment; filename="%s"'%name})
+@app.post("/api/logs/<k>/clear")
+@auth
+def logs_clear(k):
+    if k not in LOGS:
+        return err("not_found",404)
+    kind,src=LOGS[k]
+    if kind=="file":
+        try:
+            open(src,"w").close()
+        except OSError as e:
+            return err("system",500,str(e))
+    else:
+        put("logclr_"+k,int(time.time()))
     return jsonify(ok=True)
 @app.get("/api/domain")
 @auth
