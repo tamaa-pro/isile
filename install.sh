@@ -92,6 +92,7 @@ STEP="creating users and directories"
 getent group vpnusers >/dev/null || groupadd vpnusers
 id xray >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin xray
 install -d -m755 "$APP" /usr/local/etc/xray /var/www/certbot /etc/vpnpanel
+install -d -o xray -g xray -m755 /var/log/xray
 install -d -m700 "$DATA"
 STEP="downloading panel files"
 echo "[2/8] Downloading panel files"
@@ -198,6 +199,7 @@ After=network.target
 [Service]
 User=xray
 Group=xray
+LogsDirectory=xray
 Environment=XRAY_LOCATION_ASSET=/usr/local/share/xray
 ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
 Restart=always
@@ -209,6 +211,18 @@ ProtectHome=true
 PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
+EOT
+cat > /etc/logrotate.d/vpnpanel-xray <<EOT
+/var/log/xray/access.log {
+su xray xray
+daily
+maxsize 100M
+rotate 1
+copytruncate
+missingok
+notifempty
+nocompress
+}
 EOT
 cat > /etc/systemd/system/vpnbridge.service <<EOT
 [Unit]
