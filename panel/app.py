@@ -52,6 +52,7 @@ RFAIL={}
 W=v2conn.Watch()
 V2PID=[0]
 V2FAIL=[False]
+V2WARN=[0]
 XLOG_DIR=os.path.dirname(v2conn.LOG)
 CONN_MAX=1000
 try:
@@ -277,7 +278,7 @@ def xray_conf(c):
             st={"clients":cl[(p,m)] or [placeholder(sk,p,m)]}
             if p=="vless":
                 st["decryption"]="none"
-            inb.append({"tag":p+"-"+m,"listen":"127.0.0.1","port":PORTS[(p,m)],"protocol":p,"settings":st,"streamSettings":{"network":"ws","wsSettings":{"path":"/"+p}}})
+            inb.append({"tag":p+"-"+m,"listen":"127.0.0.1","port":PORTS[(p,m)],"protocol":p,"settings":st,"streamSettings":{"network":"ws","wsSettings":{"path":"/"+p},"sockopt":{"trustedXForwardedFor":["X-Real-IP","X-Forwarded-For"]}}})
     return {
         "log":{"access":v2conn.LOG if os.path.isdir(XLOG_DIR) else "none","loglevel":"warning"},
         "stats":{},
@@ -486,8 +487,10 @@ def conn_cycle():
     v2=[r for r in rows if r["proto"] in V2]
     if v2 or W.blocked:
         W.ingest(now)
-        act={r["name"] for r in v2 if now-ACTIVE.get(r["name"],0)<ACTIVE_TTL}
-        live=W.live(now,v2conn.established(),act)
+        live=W.live(now,v2conn.established())
+        if W.loop and not W.real and now-V2WARN[0]>300:
+            V2WARN[0]=now
+            print("xray access log shows only 127.0.0.1 as client address: real client IP header is not trusted by this Xray version, v2ray counter cannot work",file=sys.stderr)
         limits={r["name"]:r["conn_limit"] for r in v2 if r["conn_limit"]>0 and r["status"]=="active"}
         v2_enforce(live,limits,now)
         for r in v2:

@@ -1,10 +1,14 @@
-import os,re,ipaddress
+import os,re,json,ipaddress
 LOG="/var/log/xray/access.log"
-TTL=20
-LONG=1800
-GRACE=25
+STATE="/var/lib/vpnpanel/v2claims.json"
+GRACE=90
 BLOCK_IDLE=120
+LONG=1800
+NEW=10
+WAIT=6
+DEAD=3
 READ_MAX=8388608
+WANT_MAX=20000
 LINE=re.compile(rb"from (?:tcp:|udp:)?(?:\[([0-9a-fA-F:.]+)\]|([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)):\d+ accepted .*?\[[^\]]*?(?:>>|->)\s*([^\]\s]+)\s*\]\s*email:\s*(\S+)")
 def established(ports=(80,443)):
     out=set()
@@ -17,29 +21,61 @@ def established(ports=(80,443)):
             next(fh,None)
             for l in fh:
                 p=l.split()
-                if len(p)<4 or p[3]!="01":
+                if len(p)<7 or p[3]!="01":
                     continue
                 try:
                     if int(p[1].rpartition(":")[2],16) not in ports:
                         continue
-                    b=bytes.fromhex(p[2].rpartition(":")[0])
+                    if int(p[6])>=DEAD:
+                        continue
+                    h,_,pt=p[2].rpartition(":")
+                    b=bytes.fromhex(h)
                     if v6:
                         a=ipaddress.IPv6Address(b"".join(b[i:i+4][::-1] for i in (0,4,8,12)))
                         if a.ipv4_mapped:
                             a=a.ipv4_mapped
                     else:
                         a=ipaddress.IPv4Address(b[::-1])
+                    out.add((str(a),int(pt,16)))
                 except ValueError:
                     continue
-                out.add(str(a))
     return out
 class Watch:
-    def __init__(self):
-        self.seen={}
+    def __init__(self,state=STATE):
+        self.state=state
         self.off=0
+        self.first={}
+        self.claim={}
+        self.want=[]
+        self.blk={}
         self.over={}
         self.blocked={}
         self.ipc={}
+        self.loop=0
+        self.real=0
+        self.saved=0
+        self.dirty=False
+        self.boot=self.load()
+    def load(self):
+        try:
+            with open(self.state) as f:
+                d=json.load(f)
+            return {(ip,int(pt)):(n,float(t)) for ip,pt,n,t in d}
+        except (OSError,ValueError,TypeError):
+            return {}
+    def save(self,now):
+        if not self.dirty or now-self.saved<10:
+            return
+        self.saved=now
+        self.dirty=False
+        try:
+            tmp=self.state+".tmp"
+            fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+            with os.fdopen(fd,"w") as f:
+                json.dump([[ip,pt,n,self.first.get((ip,pt),now)] for (ip,pt),n in self.claim.items()],f)
+            os.replace(tmp,self.state)
+        except OSError:
+            pass
     def norm(self,raw):
         v=self.ipc.get(raw)
         if v is None:
@@ -47,7 +83,7 @@ class Watch:
                 self.ipc.clear()
             try:
                 a=ipaddress.ip_address(raw.decode("ascii","ignore"))
-                v="" if a.is_loopback else str(a)
+                v="lo" if a.is_loopback else str(a)
             except ValueError:
                 v=""
             self.ipc[raw]=v
@@ -59,16 +95,15 @@ class Watch:
         ip=self.norm(m.group(1) or m.group(2))
         if not ip:
             return
-        k=(m.group(4).decode("ascii","ignore"),ip)
-        e=self.seen.get(k)
-        if e is None:
-            e=self.seen[k]=[0,0,0]
+        if ip=="lo":
+            self.loop+=1
+            return
+        self.real+=1
+        n=m.group(4).decode("ascii","ignore")
         if m.group(3)==b"block":
-            e[2]=now
-        else:
-            if now-e[1]>TTL:
-                e[0]=now
-            e[1]=now
+            self.blk[(n,ip)]=now
+        elif len(self.want)<WANT_MAX:
+            self.want.append([n,ip,now])
     def ingest(self,now):
         try:
             size=os.stat(LOG).st_size
@@ -94,22 +129,59 @@ class Watch:
                 self.off=0
         except OSError:
             pass
-        if len(self.seen)>2000 or now%60<1:
-            for k in [k for k,e in self.seen.items() if now-max(e[1],e[2])>LONG]:
-                self.seen.pop(k,None)
-    def live(self,now,estab,active):
-        out={}
-        cand={}
-        for (n,ip),e in self.seen.items():
-            if ip not in estab or ip in self.blocked.get(n,{}):
+        if len(self.blk)>2000 or now%60<1:
+            for k in [k for k,t in self.blk.items() if now-t>LONG]:
+                self.blk.pop(k,None)
+    def sync(self,now,socks):
+        for k in [k for k in self.first if k not in socks]:
+            self.first.pop(k,None)
+            if self.claim.pop(k,None) is not None:
+                self.dirty=True
+        for k in socks:
+            if k not in self.first:
+                b=self.boot.get(k)
+                self.first[k]=b[1] if b else now
+                if b and k not in self.claim:
+                    self.claim[k]=b[0]
+        self.boot={}
+        byip={}
+        for k in socks:
+            if k not in self.claim:
+                byip.setdefault(k[0],[]).append(k)
+        have=set((n,k[0]) for k,n in self.claim.items())
+        keep=[]
+        for ev in self.want:
+            n,ip,t=ev
+            free=byip.get(ip)
+            pick=None
+            if free:
+                new=[k for k in free if now-self.first[k]<=NEW]
+                if new:
+                    pick=min(new,key=lambda k:self.first[k])
+                elif (n,ip) not in have:
+                    pick=max(free,key=lambda k:self.first[k])
+            if pick:
+                free.remove(pick)
+                self.claim[pick]=n
+                have.add((n,ip))
+                self.dirty=True
+            elif now-t<WAIT:
+                keep.append(ev)
+        self.want=keep
+        self.save(now)
+    def live(self,now,socks):
+        self.sync(now,socks)
+        since={}
+        for k,n in self.claim.items():
+            if k[0] in self.blocked.get(n,{}):
                 continue
-            if e[1] and now-e[1]<=TTL:
-                out.setdefault(n,[]).append((e[0],ip))
-            elif e[1] and now-e[1]<=LONG:
-                cand.setdefault(n,[]).append((e[0],ip))
-        for n,l in cand.items():
-            if n not in out and n in active and len(l)==1:
-                out[n]=l
+            key=(n,k[0])
+            t=self.first.get(k,now)
+            if key not in since or t<since[key]:
+                since[key]=t
+        out={}
+        for (n,ip),t in since.items():
+            out.setdefault(n,[]).append((t,ip))
         for l in out.values():
             l.sort()
         return out
@@ -125,7 +197,7 @@ class Watch:
                 self.over.pop(n,None)
         for n,L in limits.items():
             b=self.blocked.get(n,{})
-            gone=[ip for ip,t in b.items() if now-max(t,self.seen.get((n,ip),[0,0,0])[2])>BLOCK_IDLE]
+            gone=[ip for ip,t in b.items() if now-max(t,self.blk.get((n,ip),0))>BLOCK_IDLE]
             rem+=[(n,ip) for ip in gone]
             cur=live.get(n,[])
             if len(cur)>L:
