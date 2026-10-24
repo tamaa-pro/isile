@@ -5,6 +5,7 @@ from urllib.parse import quote
 from urllib.request import urlopen,Request
 from flask import Flask,request,session,jsonify,render_template,redirect,Response
 from werkzeug.security import generate_password_hash,check_password_hash
+import sshconn,v2conn
 BASE=os.path.dirname(os.path.abspath(__file__))
 APPDIR=os.path.dirname(BASE)
 DATA="/var/lib/vpnpanel"
@@ -45,6 +46,14 @@ SP_B={}
 SP_T=time.time()
 SPEED_TTL=30
 RESERVED=("login","api","static")
+CONN={}
+SSH_OVER={}
+RFAIL={}
+W=v2conn.Watch()
+V2PID=[0]
+V2FAIL=[False]
+XLOG_DIR=os.path.dirname(v2conn.LOG)
+CONN_MAX=1000
 try:
     with open(BASE+"/VERSION") as f:
         VERSION=f.read().strip()
@@ -65,6 +74,9 @@ CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,se
         c.execute("ALTER TABLE accounts ADD COLUMN tls TEXT NOT NULL DEFAULT 'tls'")
     if "transport" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ws'")
+    if "conn_limit" not in cols:
+        c.execute("ALTER TABLE accounts ADD COLUMN conn_limit INTEGER NOT NULL DEFAULT 0")
+    c.execute("CREATE TABLE IF NOT EXISTS v2block(name TEXT NOT NULL,ip TEXT NOT NULL,PRIMARY KEY(name,ip))")
     c.commit()
     c.close()
     os.chmod(DBP,0o600)
@@ -267,9 +279,9 @@ def xray_conf(c):
                 st["decryption"]="none"
             inb.append({"tag":p+"-"+m,"listen":"127.0.0.1","port":PORTS[(p,m)],"protocol":p,"settings":st,"streamSettings":{"network":"ws","wsSettings":{"path":"/"+p}}})
     return {
-        "log":{"access":"none","loglevel":"warning"},
+        "log":{"access":v2conn.LOG if os.path.isdir(XLOG_DIR) else "none","loglevel":"warning"},
         "stats":{},
-        "api":{"tag":"api","services":["StatsService","HandlerService"]},
+        "api":{"tag":"api","services":["StatsService","HandlerService","RoutingService"]},
         "policy":{"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}}},
         "inbounds":inb,
         "outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}],
@@ -394,6 +406,103 @@ def track_traffic():
         m_rx+=rx-lr if rx>=lr else rx
         m_tx+=tx-lt if tx>=lt else tx
     puts({"month":cur,"m_rx":m_rx,"m_tx":m_tx,"m_off":off,"last_rx":rx,"last_tx":tx})
+def rule_tag(n,ip):
+    return "lim-%s-%s"%(n,ip)
+def xray_pid():
+    v=sh(["systemctl","show","-p","MainPID","--value","xray"]).stdout.strip()
+    return int(v) if v.isdigit() else 0
+def rule_add(n,ip):
+    tag=rule_tag(n,ip)
+    sh([XBIN,"api","rmrules","-s",XAPI,tag])
+    fd,path=tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd,"w") as f:
+        json.dump({"routing":{"rules":[{"type":"field","ruleTag":tag,"user":[n],"source":[ip],"outboundTag":"block"}]}},f)
+    r=sh([XBIN,"api","adrules","-s",XAPI,path])
+    os.unlink(path)
+    if r.returncode:
+        print("xray adrules failed:",r.stdout,r.stderr,file=sys.stderr)
+    return r.returncode==0
+def rule_rem(n,ip):
+    return sh([XBIN,"api","rmrules","-s",XAPI,rule_tag(n,ip)]).returncode==0
+def blk_db(sql,args):
+    try:
+        c=db()
+        c.execute(sql,args)
+        c.commit()
+        c.close()
+    except sqlite3.Error:
+        pass
+def v2_enforce(live,limits,now):
+    add,rem=W.plan(limits,live,now)
+    if W.blocked or add:
+        pid=xray_pid()
+        if V2PID[0] and pid!=V2PID[0]:
+            for n,b in list(W.blocked.items()):
+                for ip in list(b):
+                    rule_add(n,ip)
+        V2PID[0]=pid
+    else:
+        V2PID[0]=0
+    fail=False
+    for n,ip in add:
+        if rule_add(n,ip):
+            W.confirm_add(n,ip,now)
+            blk_db("INSERT OR IGNORE INTO v2block(name,ip) VALUES(?,?)",(n,ip))
+        else:
+            fail=True
+    for n,ip in rem:
+        k=(n,ip)
+        if rule_rem(n,ip) or RFAIL.get(k,0)>=2 or not xray_running():
+            W.confirm_rem(n,ip)
+            RFAIL.pop(k,None)
+            blk_db("DELETE FROM v2block WHERE name=? AND ip=?",(n,ip))
+        else:
+            RFAIL[k]=RFAIL.get(k,0)+1
+    V2FAIL[0]=fail
+def conn_cycle():
+    global CONN
+    now=time.time()
+    c=db()
+    try:
+        rows=c.execute("SELECT name,proto,uid,status,conn_limit FROM accounts").fetchall()
+    finally:
+        c.close()
+    new={}
+    um={r["uid"]:r for r in rows if r["proto"]=="ssh" and r["uid"] is not None}
+    for uid,l in sshconn.scan(um).items():
+        r=um[uid]
+        n=r["name"]
+        new[n]={"n":len(l),"ips":[]}
+        L=r["conn_limit"]
+        if L and len(l)>L and r["status"]=="active":
+            SSH_OVER[n]=SSH_OVER.get(n,0)+1
+            if SSH_OVER[n]>=2:
+                for st,pid in l[L:]:
+                    sshconn.kill(pid)
+        else:
+            SSH_OVER.pop(n,None)
+    for n in [n for n in SSH_OVER if n not in new]:
+        SSH_OVER.pop(n,None)
+    v2=[r for r in rows if r["proto"] in V2]
+    if v2 or W.blocked:
+        W.ingest(now)
+        act={r["name"] for r in v2 if now-ACTIVE.get(r["name"],0)<ACTIVE_TTL}
+        live=W.live(now,v2conn.established(),act)
+        limits={r["name"]:r["conn_limit"] for r in v2 if r["conn_limit"]>0 and r["status"]=="active"}
+        v2_enforce(live,limits,now)
+        for r in v2:
+            n=r["name"]
+            l=[x for x in live.get(n,[]) if x[1] not in W.blocked.get(n,{})]
+            if l:
+                new[n]={"n":len(l),"ips":[ip for s,ip in l]}
+    CONN=new
+def conn_worker():
+    while True:
+        time.sleep(1)
+        try:
+            conn_cycle()
+        except Exception:
+            traceback.print_exc()
 def worker():
     n=0
     while True:
@@ -852,7 +961,12 @@ def lst():
     rows=[]
     for r in c.execute("SELECT * FROM accounts ORDER BY created DESC"):
         o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls","transport")}
-        o["active"]=r["status"]=="active" and time.time()-ACTIVE.get(r["name"],0)<ACTIVE_TTL
+        cn=CONN.get(r["name"],{})
+        o["conn"]=cn.get("n",0)
+        o["conn_limit"]=r["conn_limit"]
+        o["blocked"]=len(W.blocked.get(r["name"],{}))
+        o["blk_fail"]=bool(V2FAIL[0] and r["proto"] in V2 and r["conn_limit"]>0)
+        o["active"]=r["status"]=="active" and (o["conn"]>0 or time.time()-ACTIVE.get(r["name"],0)<ACTIVE_TTL)
         o["sp_up"],o["sp_down"]=speed_of(r["name"]) if o["active"] else (0,0)
         rows.append(o)
     c.close()
@@ -905,9 +1019,10 @@ def info(name):
         items.append({"k":"pass" if p=="trojan" else "uuid","value":s,"rows":1})
     if public_on():
         items.insert(0,{"k":"page","value":page_url(n),"rows":1})
-    act=r["status"]=="active" and time.time()-ACTIVE.get(n,0)<ACTIVE_TTL
+    cn=CONN.get(n,{})
+    act=r["status"]=="active" and (cn.get("n",0)>0 or time.time()-ACTIVE.get(n,0)<ACTIVE_TTL)
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on)
+    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],conn_ips=cn.get("ips",[]),blocked=len(W.blocked.get(n,{})),items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on)
 def parse_common(d,creating):
     try:
         out={}
@@ -927,6 +1042,11 @@ def parse_common(d,creating):
             if not 0<=q<=100000:
                 return None
             out["quota"]=int(q*GB)
+        if creating or d.get("conn_limit") not in (None,""):
+            cl=int(d.get("conn_limit") or 0)
+            if not 0<=cl<=CONN_MAX:
+                return None
+            out["conn_limit"]=cl
         return out
     except (TypeError,ValueError):
         return None
@@ -980,7 +1100,7 @@ def create():
                 except RuntimeError as e:
                     return err("system",400,str(e))
             now=int(time.time())
-            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport) VALUES(?,?,?,?,?,?,?,?,'active',?,?)",(name,proto,sec,uid,now,pc["expires"],pc["quota"],note,tls,transport))
+            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport,conn_limit) VALUES(?,?,?,?,?,?,?,?,'active',?,?,?)",(name,proto,sec,uid,now,pc["expires"],pc["quota"],note,tls,transport,pc["conn_limit"]))
             c.commit()
             if proto=="ssh":
                 collect(c)
@@ -1022,6 +1142,8 @@ def edit(name):
                 sets["expires"]=pc["expires"]
             if "quota" in pc:
                 sets["quota"]=pc["quota"]
+            if "conn_limit" in pc:
+                sets["conn_limit"]=pc["conn_limit"]
             if d.get("tls"):
                 if d["tls"] not in ("tls","plain","both"):
                     return err("bad_values")
@@ -1107,9 +1229,10 @@ def public_api(name):
     c.close()
     if not r:
         return err("not_found",404)
-    act=r["status"]=="active" and time.time()-ACTIVE.get(name,0)<ACTIVE_TTL
+    cn=CONN.get(name,{})
+    act=r["status"]=="active" and (cn.get("n",0)>0 or time.time()-ACTIVE.get(name,0)<ACTIVE_TTL)
     spu,spd=speed_of(name) if act else (0,0)
-    return jsonify(name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()),cc=server_cc())
+    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()),cc=server_cc())
 @app.get("/<name>")
 def public_page(name):
     name=name.lower()
@@ -1143,10 +1266,15 @@ def main():
     app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",PERMANENT_SESSION_LIFETIME=timedelta(hours=12),MAX_CONTENT_LENGTH=65536)
     with LOCK:
         c=db()
+        for r in c.execute("SELECT name,ip FROM v2block").fetchall():
+            rule_rem(r["name"],r["ip"])
+        c.execute("DELETE FROM v2block")
+        c.commit()
         nft_apply(c)
         reconcile(c)
         c.close()
     threading.Thread(target=worker,daemon=True).start()
+    threading.Thread(target=conn_worker,daemon=True).start()
     from waitress import serve
     serve(app,host="127.0.0.1",port=8000,threads=8)
 if __name__=="__main__":

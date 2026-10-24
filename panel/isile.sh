@@ -89,7 +89,7 @@ nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
 [ -z "$d" ] || certbot delete --cert-name "$d" --non-interactive >/dev/null 2>&1
 rm -f /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 for p in 2080 80 443; do ufw delete allow "$p/tcp" >/dev/null 2>&1; done
-rm -rf "$APP" "$DATA" /etc/vpnpanel /usr/local/etc/xray /usr/local/share/xray /usr/local/bin/xray /var/log/isile-install.log
+rm -rf "$APP" "$DATA" /etc/vpnpanel /usr/local/etc/xray /usr/local/share/xray /usr/local/bin/xray /var/log/xray /etc/logrotate.d/vpnpanel-xray /var/log/isile-install.log
 echo "=================================================="
 echo "  isile was uninstalled completely"
 echo "=================================================="
