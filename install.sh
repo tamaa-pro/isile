@@ -224,6 +224,12 @@ notifempty
 nocompress
 }
 EOT
+cat > /etc/sysctl.d/99-vpnpanel-keepalive.conf <<EOT
+net.ipv4.tcp_keepalive_time=45
+net.ipv4.tcp_keepalive_intvl=10
+net.ipv4.tcp_keepalive_probes=3
+EOT
+sysctl -p /etc/sysctl.d/99-vpnpanel-keepalive.conf >/dev/null 2>&1 || true
 cat > /etc/systemd/system/vpnbridge.service <<EOT
 [Unit]
 Description=SSH WebSocket bridge
