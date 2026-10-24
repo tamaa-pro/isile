@@ -110,6 +110,7 @@ const dchips=(vals,f)=>el('div',{class:'chips'},...vals.map(n=>el('button',{type
 const chips=(vals,input)=>el('div',{class:'chips'},...vals.map(v=>el('button',{type:'button',class:'chip',onclick:()=>{input.value=v}},v===0?ic('infinity'):v)));
 const meter=(p,c='')=>{const i=el('i');i.style.width=Math.max(0,Math.min(100,p))+'%';return el('div',{class:'meter '+c},i)};
 const liveDot=on=>el('span',{class:'dot'+(on?' live':''),title:t(on?'live_on':'live_off')});
+const connPill=a=>{const L=a.conn_limit;return el('span',{class:'pill ltr '+(a.conn>0?(L&&a.conn>=L?'warn':'ok'):'off')},ic('plug'),a.conn+' / '+(L||'∞'))};
 const badge=p=>el('span',{class:'pb p-'+p},ic(PM[p].i),PM[p].n);
 const pill=(c,l)=>el('span',{class:'pill '+c},l);
 function ask(msg,okLabel,onOk,o={}){
@@ -163,7 +164,7 @@ el('div',{class:'tw'},el('div',{class:'tile-v ltr'},bytes(used)+(cap?' / '+bytes
 cap?meter(pc,pc>=95?'bad':pc>=80?'warnm':''):null,
 el('div',{class:'muted tile-s'},cap?(used>=cap?t('d_cap_over'):t('d_cap_left',bytes(cap-used)))+' · '+pc.toFixed(1)+'%':t('d_no_cap')));
 const row2=el('div',{class:'grid g4'},
-tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)),
+tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)+' · '+t('d_conn_n',A.reduce((x,a)=>x+(a.conn||0),0))),
 tile('chart-line','c7',t('d_traffic'),bytes(up+dn),'↑ '+bytes(up)+' · ↓ '+bytes(dn)),
 tile('clock','c8',t('d_uptime'),upt(s.uptime),t('d_load')+' '+s.load.map(x=>x.toFixed(2)).join(' / ')));
 const tot=Math.max(1,up+dn);
@@ -188,7 +189,7 @@ return el('tr',{},
 el('td',{},el('b',{},a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
 el('td',{},pill(SC[a.status],t('st_'+a.status))),
-el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active)),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
+el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active),connPill(a)),a.blocked?el('div',{class:'sm'},pill('bad',t('c_blocked',a.blocked))):null,a.blk_fail?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('c_blk_fail')):null,act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
 el('td',{},el('div',{class:'dtv'},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
 el('td',{},el('div',{class:'acts'},
@@ -229,6 +230,9 @@ const used=r.up+r.down;
 const head=el('div',{class:'info-h'},
 el('div',{class:'row'},badge(pk(r)),pill(SC[r.status],t('st_'+r.status))),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active),t(r.active?'live_on':'live_off'))),
+el('div',{class:'kv'},el('span',{},ic('plug'),t('c_conn')),el('b',{class:'ltr'},r.conn+' / '+(r.conn_limit||'∞'))),
+r.conn_ips&&r.conn_ips.length?el('div',{class:'kv'},el('span',{},ic('network-wired'),t('i_conn_ips')),el('b',{class:'ltr'},r.conn_ips.join('  '))):null,
+r.blocked?el('div',{class:'kv'},el('span',{},ic('ban'),t('c_blocked',r.blocked)),el('b',{})):null,
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
@@ -254,6 +258,8 @@ if(org)org.setSeconds(0,0);
 const startD=ed?org:(()=>{const n=new Date();n.setSeconds(0,0);return n})();
 const expF=dtField(startD);
 const quota=el('input',{type:'number',min:0,step:'any',value:ed&&a.quota?+(a.quota/GB).toFixed(3):0});
+const connLim=el('input',{type:'number',min:0,max:1000,step:1,value:ed?(a.conn_limit||0):0});
+const connHint=el('small',{class:'muted'});
 const note=el('input',{maxlength:100,value:ed?a.note:''});
 const genName=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{name.value='u'+rnd(6).toLowerCase()}},ic('dice'));
 const genSec=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{secret.value=(st.kind==='v2'&&st.proto!=='trojan')?crypto.randomUUID():rnd(14)}},ic('dice'));
@@ -272,6 +278,7 @@ function sync(){
 const v2=st.kind==='v2';
 boxProto.hidden=!v2||ed;boxTransport.hidden=v2;boxTls.hidden=forced;tlsHint.hidden=!forced;
 tlsHintTxt.textContent=t(!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
+connHint.textContent=t(v2?'f_conn_limit_v2':'f_conn_limit_ssh');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
@@ -280,13 +287,14 @@ field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],expF),el('small',{class:'muted'},t('f_exp_hint'))),
 el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota)),
+el('div',{class:'f'},el('span',{},t('f_conn_limit')),connLim,chips([1,2,3,5,0],connLim),connHint),
 field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
 btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
 const x=expF.get();
 if(!x.ok){toast(t('e_bad_date'));return}
-const b={secret:secret.value,quota_gb:quota.value,note:note.value,tls:st.tls,transport:st.transport};
+const b={secret:secret.value,quota_gb:quota.value,conn_limit:connLim.value,note:note.value,tls:st.tls,transport:st.transport};
 if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(x.d.getTime()/1000):0;
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
