@@ -189,7 +189,7 @@ return el('tr',{},
 el('td',{},el('b',{},a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
 el('td',{},pill(SC[a.status],t('st_'+a.status))),
-el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active),connPill(a)),a.blocked?el('div',{class:'sm'},pill('bad',t('c_blocked',a.blocked))):null,a.blk_fail?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('c_blk_fail')):null,act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
+el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active),a.proto==='ssh'?connPill(a):null),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
 el('td',{},el('div',{class:'dtv'},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
 el('td',{},el('div',{class:'acts'},
@@ -230,9 +230,7 @@ const used=r.up+r.down;
 const head=el('div',{class:'info-h'},
 el('div',{class:'row'},badge(pk(r)),pill(SC[r.status],t('st_'+r.status))),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active),t(r.active?'live_on':'live_off'))),
-el('div',{class:'kv'},el('span',{},ic('plug'),t('c_conn')),el('b',{class:'ltr'},r.conn+' / '+(r.conn_limit||'∞'))),
-r.conn_ips&&r.conn_ips.length?el('div',{class:'kv'},el('span',{},ic('network-wired'),t('i_conn_ips')),el('b',{class:'ltr'},r.conn_ips.join('  '))):null,
-r.blocked?el('div',{class:'kv'},el('span',{},ic('ban'),t('c_blocked',r.blocked)),el('b',{})):null,
+r.proto==='ssh'?el('div',{class:'kv'},el('span',{},ic('plug'),t('c_conn')),el('b',{class:'ltr'},r.conn+' / '+(r.conn_limit||'∞'))):null,
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
@@ -274,11 +272,12 @@ const tlsHintTxt=el('small',{class:'muted'},t('f_tls_hint'));
 const boxTls=el('label',{class:'f'},el('span',{},t('f_tls')),tlsSeg,tlsHintTxt);
 const boxTransport=field(t('f_transport'),transportSeg,t('f_transport_hint'));
 const boxKind=field(t('f_type'),kindSeg);
+const boxConn=el('div',{class:'f'},el('span',{},t('f_conn_limit')),connLim,chips([1,2,3,5,0],connLim),connHint);
 function sync(){
 const v2=st.kind==='v2';
 boxProto.hidden=!v2||ed;boxTransport.hidden=v2;boxTls.hidden=forced;tlsHint.hidden=!forced;
 tlsHintTxt.textContent=t(!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
-connHint.textContent=t(v2?'f_conn_limit_v2':'f_conn_limit_ssh');
+boxConn.hidden=v2;connHint.textContent=t('f_conn_limit_ssh');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
@@ -287,14 +286,14 @@ field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],expF),el('small',{class:'muted'},t('f_exp_hint'))),
 el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota)),
-el('div',{class:'f'},el('span',{},t('f_conn_limit')),connLim,chips([1,2,3,5,0],connLim),connHint),
+boxConn,
 field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
 btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
 const x=expF.get();
 if(!x.ok){toast(t('e_bad_date'));return}
-const b={secret:secret.value,quota_gb:quota.value,conn_limit:connLim.value,note:note.value,tls:st.tls,transport:st.transport};
+const b={secret:secret.value,quota_gb:quota.value,conn_limit:st.kind==='v2'?0:connLim.value,note:note.value,tls:st.tls,transport:st.transport};
 if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(x.d.getTime()/1000):0;
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
@@ -385,10 +384,16 @@ panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm
 panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs'},
 kv(t('sys_version'),VERSION),
+latestRow(),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
 row('cloud-arrow-down',t('sys_update'),t('sys_update_desc'),btn('','cloud-arrow-down',()=>ask(t('sys_update_confirm'),t('sys_update'),()=>{runJob('/api/system/update',null,t('sys_w_update'))},{danger:false}))),
 row('trash',t('sys_uninstall'),t('sys_uninstall_desc'),btn('','trash',doUninstall,'dgr'))))))
 }
+function latestRow(){
+const b=el('b',{class:'ltr'},'…');
+const d=el('div',{class:'kv'},el('span',{},t('sys_latest')),b);
+api('GET','/api/system/latest').then(r=>{b.textContent=r.latest;d.append(r.latest===VERSION?pill('ok',t('sys_uptodate')):pill('warn',t('sys_new')))}).catch(()=>{b.textContent=t('sys_latest_err')});
+return d}
 function setLang(v){
 localStorage.setItem('lang',v);
 const d=document.documentElement;d.lang=v;d.dir=v==='ar'?'rtl':'ltr';LANG=v;
