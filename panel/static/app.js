@@ -5,6 +5,8 @@ const VERSION=$('meta[name=version]').content;
 const NS='http://www.w3.org/2000/svg';
 const GB=1073741824;
 const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const THEMES=[['blue','#6366f1','#06b6d4'],['red','#dc2626','#fb7185'],['green','#16a34a','#2dd4bf'],['purple','#8b5cf6','#e879f9'],['cyan','#0891b2','#22d3ee'],['orange','#ea580c','#fbbf24'],['pink','#db2777','#f472b6'],['gold','#d97706','#fde047']];
+const setTheme=v=>{try{localStorage.setItem('theme',v)}catch(e){}document.documentElement.dataset.theme=v};
 const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':'sshws'):a.proto;
 const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
@@ -24,19 +26,20 @@ const copy=async v=>{try{await navigator.clipboard.writeText(v);toast(t('copied'
 const modal=(title,body,btns=[],cls='')=>{const d=el('dialog',{class:cls},el('div',{class:'dlg-h'},el('h3',{},title),el('button',{class:'icon-btn',title:t('close'),onclick:()=>d.close()},ic('xmark'))),el('div',{class:'dlg-b'},body),btns.length?el('div',{class:'dlg-f'},...btns):null);d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();return d};
 const btn=(label,icon,f,c='')=>el('button',{class:'btn '+c,type:'button',onclick:f},icon?ic(icon):null,label?el('span',{},label):null);
 const seg=(opts,val,on)=>{const box=el('div',{class:'seg'});const draw=()=>box.replaceChildren(...opts.map(o=>el('button',{type:'button',class:o.v===val?'on':'',onclick:()=>{val=o.v;on(val);draw()}},o.i?ic(o.i):null,el('span',{},o.l))));draw();return box};
-function dd(opts,val,on,mw=170){
+function dd(opts,val,on,mw=170,ph){
 const lab=el('span',{class:'dd-l'});
 const b=el('button',{type:'button',class:'dd-b'},lab,ic('chevron-down','dd-c'));
 const wrap=el('div',{class:'dd'},b);
 let pop=null;
-const set=v=>{val=v;lab.textContent=(opts.find(o=>o.v===v)||opts[0]).l};
+const dot=c=>{const d=el('span',{class:'sdot'});d.style.background=c;return d};
+const set=v=>{val=v;const o=opts.find(o=>o.v===v);if(!o&&ph){lab.replaceChildren(ph);return}const x=o||opts[0];lab.replaceChildren(...(x.c?[dot(x.c)]:[]),x.l)};
 function close(){if(!pop)return;pop.remove();pop=null;wrap.classList.remove('open');document.removeEventListener('mousedown',out,true);document.removeEventListener('keydown',key,true);document.removeEventListener('scroll',sc,true);window.removeEventListener('resize',close)}
 function out(e){if(pop&&!pop.contains(e.target)&&!b.contains(e.target))close()}
 function key(e){if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close()}}
 function sc(e){if(pop&&!pop.contains(e.target))close()}
 b.addEventListener('click',()=>{
 if(pop){close();return}
-pop=el('div',{class:'dd-p'},...opts.map(o=>el('button',{type:'button',class:'dd-o'+(o.v===val?' on':''),onclick:()=>{set(o.v);on(o.v);close()}},o.i?ic(o.i):null,el('span',{},o.l),o.v===val?ic('check','dd-k'):null)));
+pop=el('div',{class:'dd-p'},...opts.map(o=>el('button',{type:'button',class:'dd-o'+(o.v===val?' on':''),onclick:()=>{set(o.v);on(o.v);close()}},o.c?dot(o.c):o.i?ic(o.i):null,el('span',{},o.l),o.v===val?ic('check','dd-k'):null)));
 wrap.append(pop);wrap.classList.add('open');
 const r=b.getBoundingClientRect();
 pop.style.minWidth=Math.max(r.width,mw)+'px';
@@ -149,6 +152,96 @@ const F={q:'',p:'',s:''};
 const push=(a,v)=>{a.push(v);if(a.length>60)a.shift()};
 async function loadAcc(){ACC=await api('GET','/api/accounts')}
 async function loadStats(){const s=await api('GET','/api/stats');if(PREV&&s.ts>PREV.ts){const d=s.ts-PREV.ts;push(H.rx,Math.max(0,(s.net_rx-PREV.net_rx)/d));push(H.tx,Math.max(0,(s.net_tx-PREV.net_tx)/d))}push(H.cpu,s.cpu);push(H.ram,s.mem_total?s.mem_used/s.mem_total*100:0);PREV=s;S=s}
+const TR={open:false,mode:'both',sel:null,el:null,days:null,upd:null};
+try{const m=localStorage.getItem('trmode');if(m==='down'||m==='up'||m==='both')TR.mode=m}catch(e){}
+const axB=n=>{if(!n||n<=0)return'0';const u=['B','KB','MB','GB','TB','PB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),5);return+(n/1024**i).toFixed(1)+' '+u[i]};
+const NICE=[1,2,3,4,5,6,8,10,20,30,40,50,60,80,100,200,300,400,500,600,800,1000,1024];
+const niceMax=v=>{if(!(v>0))return 1048576;const i=Math.min(Math.floor(Math.log(v)/Math.log(1024)),5),u=1024**i,x=v/u;return(NICE.find(n=>n>=x)||1024)*u};
+const monthName=D=>{try{return new Intl.DateTimeFormat((LANG==='ar'?'ar':'en')+'-u-nu-latn',{month:'long',timeZone:'UTC'}).format(Date.UTC(D.y,D.m-1,15))}catch(e){return String(D.m)}};
+function coresGrid(s){
+const P=s.core_pct||[];
+if(!P.length)return null;
+return el('div',{class:'cores'},...P.map((p,i)=>el('div',{class:'core'},el('div',{class:'core-h'},el('span',{},t('d_core',i+1)),el('b',{class:'ltr'},p.toFixed(0)+'%')),meter(p,p>90?'bad':p>70?'warnm':''))))
+}
+function trafficTile(s){
+if(TR.el){TR.upd(s);return TR.el}
+let cols=[];
+const val=el('div',{class:'tile-v ltr'}),rt=el('div',{class:'muted ltr'});
+const mI=el('i'),mEl=el('div',{class:'meter',hidden:true},mI);
+const note=el('div',{class:'muted tile-s'});
+const tile=el('div',{class:'tile wide tt'+(TR.open?' open':'')});
+const btnT=el('button',{type:'button',class:'icon-btn tt-btn'+(TR.open?' on':''),title:t('ch_toggle'),'aria-label':t('ch_toggle'),'aria-expanded':String(TR.open),onclick:()=>{TR.open=!TR.open;tile.classList.toggle('open',TR.open);btnT.classList.toggle('on',TR.open);btnT.setAttribute('aria-expanded',String(TR.open))}},ic('chart-simple'));
+const title=el('b',{class:'tc-t'});
+const modeSeg=seg([{v:'down',l:t('ch_down'),i:'arrow-down'},{v:'up',l:t('ch_up'),i:'arrow-up'},{v:'both',l:t('ch_both'),i:'arrows-up-down'}],TR.mode,v=>{TR.mode=v;try{localStorage.setItem('trmode',v)}catch(e){}paint()});
+const ay1=el('span',{}),ay2=el('span',{});
+const colsBox=el('div',{class:'tc-cols'});
+const infoD=el('b',{}),infoV=el('div',{class:'tc-iv'});
+const pickDay=d=>{if(TR.sel===d)return;TR.sel=d;info()};
+const hit=e=>{const x=document.elementFromPoint(e.clientX,e.clientY);const c=x&&x.closest?x.closest('.col'):null;if(c&&colsBox.contains(c))pickDay(+c.dataset.d)};
+colsBox.addEventListener('pointerdown',hit);
+colsBox.addEventListener('pointermove',e=>{if(e.pointerType==='mouse'||e.buttons)hit(e)});
+function mk(dim){
+cols=[];
+for(let i=0;i<dim;i++){
+const day=i+1,g=el('i',{class:'sgd'}),u=el('i',{class:'sgu'}),bars=el('div',{class:'bars'},g,u);
+bars.style.setProperty('--i',i);
+const c=el('button',{type:'button',class:'col'+(day===1||day%5===0?' k':''),'data-d':day,onfocus:()=>pickDay(day),onclick:()=>{TR.sel=day;info()}},el('div',{class:'cb'},bars),el('span',{class:'dl'},day));
+cols.push({el:c,bars,d:g,u})
+}
+colsBox.replaceChildren(...cols.map(c=>c.el))
+}
+function info(){
+const D=TR.days;if(!D)return;
+const day=Math.max(1,Math.min(TR.sel||D.today,D.dim)),fut=day>D.today;
+const rx=D.rx[day-1]||0,tx=D.tx[day-1]||0;
+cols.forEach((c,i)=>c.el.classList.toggle('sel',i+1===day));
+infoD.textContent=day+' '+monthName(D);
+infoV.replaceChildren(...(fut?[el('span',{class:'muted'},t('ch_future'))]:[
+el('span',{class:'ltr'},el('i',{class:'lgd d'}),'↓ '+bytes(rx)),
+el('span',{class:'ltr'},el('i',{class:'lgd u'}),'↑ '+bytes(tx)),
+el('b',{class:'ltr'},bytes(rx+tx))]))
+}
+function paint(){
+const D=TR.days;if(!D)return;
+if(cols.length!==D.dim)mk(D.dim);
+const m=TR.mode,V=[];let mx=0;
+for(let i=0;i<D.dim;i++){const d=m==='up'?0:(D.rx[i]||0),u=m==='down'?0:(D.tx[i]||0);V.push([d,u]);if(d+u>mx)mx=d+u}
+const nm=niceMax(mx);
+ay1.textContent=axB(nm);ay2.textContent=axB(nm/2);
+title.textContent=monthName(D)+' '+D.y;
+cols.forEach((c,i)=>{
+const[d,u]=V[i],tot=d+u,day=i+1;
+c.bars.style.height=(tot/nm*100)+'%';
+c.bars.classList.toggle('nz',tot>0);
+c.d.style.flexGrow=d;c.u.style.flexGrow=u;
+c.el.classList.toggle('fut',day>D.today);
+c.el.classList.toggle('today',day===D.today);
+c.el.title=day+' '+monthName(D)+(day>D.today?'':' · '+bytes(tot))
+});
+info()
+}
+TR.upd=s=>{
+const cap=s.cap_gb*GB,used=s.month_used,pc=cap?used/cap*100:0;
+val.textContent=bytes(used)+(cap?' / '+bytes(cap):'');
+rt.textContent='↓ '+bytes(s.month_rx)+'    ↑ '+bytes(s.month_tx);
+mEl.hidden=!cap;
+mEl.className='meter '+(pc>=95?'bad':pc>=80?'warnm':'');
+mI.style.width=Math.max(0,Math.min(100,pc))+'%';
+note.textContent=cap?(used>=cap?t('d_cap_over'):t('d_cap_left',bytes(cap-used)))+' · '+pc.toFixed(1)+'%':t('d_no_cap');
+if(s.days){TR.days=s.days;paint()}
+};
+tile.append(
+el('div',{class:'tile-h'},el('span',{class:'ico c9'},ic('server')),el('span',{class:'tile-t'},t('d_server_traffic')),btnT),
+el('div',{class:'tw'},val,rt),mEl,note,
+el('div',{class:'tc'},el('div',{class:'tc-in'},el('div',{class:'tc-box'},
+el('div',{class:'tc-top'},title,modeSeg),
+el('div',{class:'tc-plot'},el('div',{class:'tc-ax'},ay1,ay2,el('span',{},'0')),el('div',{class:'tc-area'},el('div',{class:'tc-lines'},el('i'),el('i'),el('i')),colsBox)),
+el('div',{class:'tc-info'},infoD,infoV)))));
+TR.el=tile;
+TR.upd(s);
+return tile
+}
+
 function drawDash(){
 const s=S,A=ACC;
 const act=A.filter(a=>a.status==='active').length;
@@ -156,17 +249,12 @@ const up=A.reduce((x,a)=>x+a.up,0),dn=A.reduce((x,a)=>x+a.down,0);
 const rx=H.rx.length?H.rx[H.rx.length-1]:0,tx=H.tx.length?H.tx[H.tx.length-1]:0;
 const ramP=s.mem_total?s.mem_used/s.mem_total*100:0,diskP=s.disk_total?s.disk_used/s.disk_total*100:0;
 const row1=el('div',{class:'grid g4'},
-tile('microchip','c1',t('d_cpu'),s.cpu.toFixed(1)+'%',t('d_cores',s.cores)+' · '+t('d_load')+' '+s.load[0].toFixed(2),spark(H.cpu,'s1',100)),
+tile('microchip','c1',t('d_cpu'),s.cpu.toFixed(1)+'%',t('d_cores',s.cores)+' · '+t('d_load')+' '+s.load[0].toFixed(2),[spark(H.cpu,'s1',100),coresGrid(s)]),
 tile('memory','c2',t('d_ram'),ramP.toFixed(1)+'%',bytes(s.mem_used)+' / '+bytes(s.mem_total),spark(H.ram,'s2',100)),
 tile('hard-drive','c3',t('d_disk'),diskP.toFixed(1)+'%',bytes(s.disk_used)+' / '+bytes(s.disk_total),meter(diskP,diskP>90?'bad':'')),
 tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+bytes(rx)+'/s'),'↑ '+bytes(tx)+'/s',spark(H.rx,'s4')),
 portsTile(s.ports||[]));
-const cap=s.cap_gb*GB,used=s.month_used,pc=cap?used/cap*100:0;
-const trf=el('div',{class:'tile wide'},
-el('div',{class:'tile-h'},el('span',{class:'ico c9'},ic('server')),el('span',{class:'tile-t'},t('d_server_traffic'))),
-el('div',{class:'tw'},el('div',{class:'tile-v ltr'},bytes(used)+(cap?' / '+bytes(cap):'')),el('div',{class:'muted ltr'},'↓ '+bytes(s.month_rx)+'    ↑ '+bytes(s.month_tx))),
-cap?meter(pc,pc>=95?'bad':pc>=80?'warnm':''):null,
-el('div',{class:'muted tile-s'},cap?(used>=cap?t('d_cap_over'):t('d_cap_left',bytes(cap-used)))+' · '+pc.toFixed(1)+'%':t('d_no_cap')));
+const trf=trafficTile(s);
 const row2=el('div',{class:'grid g4'},
 tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)+' · '+t('d_conn_n',A.reduce((x,a)=>x+(a.conn||0),0))),
 tile('chart-line','c7',t('d_traffic'),bytes(up+dn),'↑ '+bytes(up)+' · ↓ '+bytes(dn)),
@@ -179,7 +267,10 @@ const now=Date.now()/1000;
 const exp=A.filter(a=>a.expires&&a.expires>now&&a.expires-now<7*86400).sort((a,b)=>a.expires-b.expires).slice(0,6);
 const expL=el('div',{class:'list'},...(exp.length?exp.map(a=>el('div',{class:'li li-r'},badge(pk(a)),el('b',{},a.name),el('span',{class:'muted'},left(a.expires)))):[el('div',{class:'empty'},t('d_none'))]));
 const sv=el('div',{class:'svc'},...Object.entries(s.services).map(([k,v])=>el('span',{class:'pill '+(v?'ok':'bad')},ic(v?'circle-check':'circle-xmark'),k)));
-$('#view').replaceChildren(row1,trf,row2,el('div',{class:'grid g2'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid g2'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv)))
+const rest=[row2,el('div',{class:'grid g2'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid g2'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv))];
+const v=$('#view');
+if(trf.parentNode===v){while(v.firstChild!==trf)v.firstChild.remove();while(trf.nextSibling)trf.nextSibling.remove();v.insertBefore(row1,trf);v.append(...rest)}
+else v.replaceChildren(row1,trf,...rest)
 }
 function portsTile(P){
 const on=P.filter(p=>p.listening).length,tot=P.filter(p=>p.enabled).length;
@@ -319,7 +410,6 @@ await load()
 }
 async function viewSettings(){
 const s=await api('GET','/api/settings');
-const th=document.documentElement.dataset.theme;
 const vw=document.documentElement.dataset.view==='desktop'?'desktop':'mobile';
 const o=el('input',{type:'password',autocomplete:'current-password'});
 const n=el('input',{type:'password',autocomplete:'new-password'});
@@ -352,6 +442,12 @@ const saveLim=async()=>{
 try{await api('POST','/api/settings',{cap_gb:cap.value,cap_basis:bv,used_gb:usedIn.value});toast(t('lim_saved'));usedIn.value='';if(S)await loadStats()}catch(e){terr(e)}
 };
 const resetMonth=()=>ask(t('lim_reset_confirm'),t('lim_reset'),async()=>{try{await api('POST','/api/settings',{reset:true});toast(t('lim_saved'));if(S)await loadStats()}catch(e){terr(e);return false}});
+const themeBox=el('div',{class:'form'});
+const drawTheme=()=>{const cur=document.documentElement.dataset.theme;
+themeBox.replaceChildren(
+field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],cur,v=>{setTheme(v);drawTheme()})),
+field(t('s_color_theme'),dd(THEMES.map(x=>({v:x[0],l:t('th_'+x[0]),c:'linear-gradient(135deg,'+x[1]+','+x[2]+')'})),THEMES.some(x=>x[0]===cur)?cur:'',v=>{setTheme(v);drawTheme()},210,t('theme_choose'))))};
+drawTheme();
 const row=(icon,title,desc,b)=>el('div',{class:'srow'},el('span',{class:'ico c1'},ic(icon)),el('div',{class:'srow-t'},el('b',{},title),el('div',{class:'muted sm'},desc)),b);
 const pw=el('input',{type:'password',autocomplete:'current-password',placeholder:t('sys_uninstall_pw')});
 const doUninstall=()=>ask(t('sys_uninstall_confirm'),t('sys_uninstall'),async()=>{
@@ -389,7 +485,7 @@ el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.
 fillLogs();
 $('#view').replaceChildren(el('div',{class:'grid g2'},
 panel('palette',t('s_appearance'),el('div',{class:'form'},
-field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],th,v=>{localStorage.setItem('theme',v);document.documentElement.dataset.theme=v})),
+themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
 field(t('s_tz'),tzBox,t('s_tz_hint')),
@@ -441,6 +537,7 @@ el('button',{class:'nav-link',title:t('logout'),onclick:async()=>{try{await api(
 }
 async function route(){
 PAGE=location.hash.replace(/^#\//,'')||'dashboard';
+TR.el=null;
 if(!VIEWS[PAGE])PAGE='dashboard';
 document.querySelectorAll('.nav-link').forEach(a=>a.classList.toggle('on',a.dataset.p===PAGE));
 const v=$('#view');
