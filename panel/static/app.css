@@ -318,3 +318,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 @media(hover:hover){.col:hover .cb{background:rgba(var(--pr),.1)}.col.sel:hover .cb{background:rgba(var(--pr),.14)}}
 @media(max-width:720px){.tc-plot{--ch:140px;grid-template-columns:38px minmax(0,1fr);gap:4px}.tc-cols{gap:2px}.col:not(.k) .dl{visibility:hidden}.tc-box{padding:10px 8px 8px}}
 @media(prefers-reduced-motion:reduce){.tc,.bars,.bars i,.cb{transition-duration:.01ms!important;transition-delay:0s!important}}
+
+/* desktop view: medium width, two cards per row */
+:root[data-view=desktop] main{max-width:760px}
