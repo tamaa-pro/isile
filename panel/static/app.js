@@ -17,7 +17,9 @@ const rnd=n=>{const c='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789
 const toast=m=>{const x=el('div',{class:'toast',popover:'manual'},m);document.body.append(x);try{x.showPopover()}catch(e){}setTimeout(()=>x.remove(),3500)};
 const terr=e=>{if(e.message==='unauthorized')return;const k='e_'+e.message;const m=tx(k);toast(m!==k?m+(e.detail?': '+e.detail:''):(e.detail||e.message))};
 const field=(l,i,h)=>el('label',{class:'f'},el('span',{},l),i,h?el('small',{class:'muted'},h):null);
-const kv=(l,v,x)=>el('div',{class:'kv'},el('span',{},l),el('b',{class:'ltr'},v),x);
+const kv=(l,v,x)=>el('div',{class:'kv'},el('span',{},l),x?el('div',{class:'kv-v'},x,el('b',{class:'ltr'},v)):el('b',{class:'ltr'},v));
+const SI={active:'circle-check',disabled:'ban',expired:'circle-xmark',limit:'triangle-exclamation'};
+const sti=a=>el('span',{class:'sti '+SC[a.status],title:t('st_'+a.status)},ic(SI[a.status]||'circle'));
 const copy=async v=>{try{await navigator.clipboard.writeText(v);toast(t('copied'))}catch{toast(t('copy_fail'))}};
 const modal=(title,body,btns=[],cls='')=>{const d=el('dialog',{class:cls},el('div',{class:'dlg-h'},el('h3',{},title),el('button',{class:'icon-btn',title:t('close'),onclick:()=>d.close()},ic('xmark'))),el('div',{class:'dlg-b'},body),btns.length?el('div',{class:'dlg-f'},...btns):null);d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();return d};
 const btn=(label,icon,f,c='')=>el('button',{class:'btn '+c,type:'button',onclick:f},icon?ic(icon):null,label?el('span',{},label):null);
@@ -186,9 +188,8 @@ const used=a.up+a.down;
 const act=a.status==='active';
 const tlsTag=a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
 return el('tr',{},
-el('td',{},el('b',{},a.name),a.note?el('div',{class:'muted sm'},a.note):null),
+el('td',{},el('b',{},sti(a),a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
-el('td',{},pill(SC[a.status],t('st_'+a.status))),
 el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active),a.proto==='ssh'?connPill(a):null),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
 el('td',{},el('div',{class:'dtv'},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
@@ -202,7 +203,7 @@ function drawRows(){
 const q=F.q.trim().toLowerCase();
 const l=ACC.filter(a=>(!F.p||pk(a)===F.p)&&(!F.s||a.status===F.s)&&(!q||a.name.includes(q)||a.note.toLowerCase().includes(q)));
 const r=$('#rows');if(!r)return;
-r.replaceChildren(...(l.length?l.map(accRow):[el('tr',{},el('td',{colspan:7,class:'empty'},t('a_empty')))]));
+r.replaceChildren(...(l.length?l.map(accRow):[el('tr',{},el('td',{colspan:6,class:'empty'},t('a_empty')))]));
 const c=$('#cnt');if(c)c.textContent=l.length+' / '+ACC.length
 }
 function viewAccounts(){
@@ -211,7 +212,7 @@ q.addEventListener('input',()=>{F.q=q.value;drawRows()});
 const p=dd([{v:'',l:t('a_all_protos'),i:'layer-group'},...Object.entries(PM).map(([k,v])=>({v:k,l:v.n,i:v.i}))],F.p,v=>{F.p=v;drawRows()});
 const s=dd([{v:'',l:t('a_all_status'),i:'filter'},...Object.keys(SC).map(k=>({v:k,l:t('st_'+k)}))],F.s,v=>{F.s=v;drawRows()});
 const tb=el('div',{class:'toolbar'},el('div',{class:'search'},ic('magnifying-glass'),q),p,s,el('span',{class:'muted',id:'cnt'}),btn(t('a_add'),'plus',()=>accDlg(),'pri'));
-const th=['c_name','c_proto','c_status','c_live','c_usage','c_expiry','c_actions'].map(k=>el('th',{},t(k)));
+const th=['c_name','c_proto','c_live','c_usage','c_expiry','c_actions'].map(k=>el('th',{},t(k)));
 $('#view').replaceChildren(tb,el('div',{class:'wrap'},el('table',{},el('thead',{},el('tr',{},th)),el('tbody',{id:'rows'}))));
 drawRows()
 }
@@ -236,7 +237,8 @@ el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:
 r.quota?meter(used/r.quota*100):null,
 el('div',{class:'kv'},el('span',{},ic('calendar-plus'),t('c_created')),el('b',{class:'dtv'},dt(r.created))),
 el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{class:'dtv'},dt(r.expires))),
-el('div',{class:'kv'},el('span',{},ic('hourglass-half'),t('c_left')),el('b',{},left(r.expires))));
+el('div',{class:'kv'},el('span',{},ic('hourglass-half'),t('c_left')),el('b',{},left(r.expires))),
+r.note?el('div',{class:'note-b'},el('span',{},ic('note-sticky'),t('f_note')),el('div',{class:'note-t'},r.note)):null);
 const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
 const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy'))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
 modal(t('i_title',n),el('div',{},head,warn,...items))
@@ -316,6 +318,7 @@ await load()
 async function viewSettings(){
 const s=await api('GET','/api/settings');
 const th=document.documentElement.dataset.theme;
+const vw=document.documentElement.dataset.view==='desktop'?'desktop':'mobile';
 const o=el('input',{type:'password',autocomplete:'current-password'});
 const n=el('input',{type:'password',autocomplete:'new-password'});
 const c=el('input',{type:'password',autocomplete:'new-password'});
@@ -354,6 +357,11 @@ try{await api('POST','/api/system/uninstall',{password:pw.value})}catch(e){terr(
 const ov=overlay(t('sys_w_uninstall'));
 setTimeout(()=>ov.replaceChildren(el('div',{class:'ovl-b'},ic('circle-check','ovl-i ok-i'),el('div',{class:'ovl-t'},t('sys_removed')))),9000)
 },{extra:pw});
+const pwr=el('input',{type:'password',autocomplete:'current-password',placeholder:t('sys_uninstall_pw')});
+const doReset=()=>ask(t('sys_reset_confirm'),t('sys_reset'),async()=>{
+try{await api('POST','/api/system/reset',{password:pwr.value})}catch(e){terr(e);return false}
+toast(t('sys_reset_done'));setTimeout(()=>location.reload(),900)
+},{extra:pwr});
 const bn=el('textarea',{rows:5,maxlength:2000,dir:'auto',placeholder:t('bn_ph')});
 bn.value=s.banner||'';
 const saveBn=async(v)=>{try{await api('POST','/api/settings',{banner:v});if(v==='')bn.value='';toast(t('bn_saved'))}catch(e){terr(e)}};
@@ -371,7 +379,8 @@ fillLogs();
 $('#view').replaceChildren(el('div',{class:'grid g2'},
 panel('palette',t('s_appearance'),el('div',{class:'form'},
 field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],th,v=>{localStorage.setItem('theme',v);document.documentElement.dataset.theme=v})),
-field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)))),
+field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
+field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')))),
 panel('key',t('s_security'),el('div',{class:'form'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),btn(t('s_change'),'floppy-disk',savePw,'pri'))),
 panel('globe',t('dm_title'),el('div',{class:'form'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('gauge-high',t('lim_title'),el('div',{class:'form'},
@@ -387,12 +396,14 @@ kv(t('sys_version'),VERSION),
 latestRow(),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
 row('cloud-arrow-down',t('sys_update'),t('sys_update_desc'),btn('','cloud-arrow-down',()=>ask(t('sys_update_confirm'),t('sys_update'),()=>{runJob('/api/system/update',null,t('sys_w_update'))},{danger:false}))),
+row('broom',t('sys_reset'),t('sys_reset_desc'),btn('','broom',doReset,'dgr')),
 row('trash',t('sys_uninstall'),t('sys_uninstall_desc'),btn('','trash',doUninstall,'dgr'))))))
 }
 function latestRow(){
 const b=el('b',{class:'ltr'},'…');
-const d=el('div',{class:'kv'},el('span',{},t('sys_latest')),b);
-api('GET','/api/system/latest').then(r=>{b.textContent=r.latest;d.append(r.latest===VERSION?pill('ok',t('sys_uptodate')):pill('warn',t('sys_new')))}).catch(()=>{b.textContent=t('sys_latest_err')});
+const g=el('div',{class:'kv-v'},b);
+const d=el('div',{class:'kv'},el('span',{},t('sys_latest')),g);
+api('GET','/api/system/latest').then(r=>{b.textContent=r.latest;g.prepend(r.latest===VERSION?pill('ok',t('sys_uptodate')):pill('warn',t('sys_new')))}).catch(()=>{b.textContent=t('sys_latest_err')});
 return d}
 function setLang(v){
 localStorage.setItem('lang',v);
