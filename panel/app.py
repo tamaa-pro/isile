@@ -1,5 +1,6 @@
 import os,sys,re,json,time,uuid,hmac,base64,socket,secrets,shutil,sqlite3,tempfile,functools,threading,traceback,subprocess
 from datetime import timedelta,datetime,timezone
+from zoneinfo import ZoneInfo,available_timezones
 from shlex import quote as shq
 from urllib.parse import quote
 from urllib.request import urlopen,Request
@@ -453,17 +454,48 @@ def worker():
             traceback.print_exc()
 def err(code,status=400,detail=None):
     return jsonify(error=code,detail=detail),status
-def midnight_exp(tzo):
-    now=time.time()
+TZ_AREAS=("Africa","America","Antarctica","Arctic","Asia","Atlantic","Australia","Europe","Indian","Pacific")
+TZ_LIST=[]
+def tz_ok(n):
     try:
-        o=int(tzo)
-        if not -840<=o<=840:
-            raise ValueError
-        return (int((now-o*60)//86400)+1)*86400+o*60
-    except (TypeError,ValueError):
-        n=datetime.now().astimezone()
-        m=(n+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
-        return int(m.timestamp())
+        ZoneInfo(n)
+        return True
+    except Exception:
+        return False
+def tz_list():
+    if not TZ_LIST:
+        try:
+            TZ_LIST.extend(sorted(n for n in available_timezones() if n.split("/")[0] in TZ_AREAS and "/" in n))
+        except Exception:
+            pass
+    return TZ_LIST
+def server_tz():
+    v=""
+    try:
+        with open("/etc/timezone") as f:
+            v=f.read().strip()
+    except OSError:
+        pass
+    if not v:
+        try:
+            p=os.path.realpath("/etc/localtime")
+            if "/zoneinfo/" in p:
+                v=p.split("/zoneinfo/",1)[1]
+        except OSError:
+            pass
+    return v if v and tz_ok(v) else "UTC"
+def tz_region():
+    v=get("tz","")
+    return v if v and tz_ok(v) else server_tz()
+def panel_tz():
+    return "UTC" if get("tz_utc","0")=="1" else tz_region()
+def midnight_exp():
+    try:
+        z=ZoneInfo(panel_tz())
+    except Exception:
+        z=timezone.utc
+    m=(datetime.now(z)+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
+    return int(m.timestamp())
 def valid_session():
     h=get("admin_hash","")
     return bool(session.get("u")) and session.get("ph")==h[:16] and session.get("exp",0)>time.time()
@@ -512,9 +544,9 @@ def login():
     if ok_u and ok_p:
         FAILS.pop(ip,None)
         session.clear()
-        session.permanent=False
+        session.permanent=True
         session["u"]=1
-        session["exp"]=midnight_exp(request.form.get("tz"))
+        session["exp"]=midnight_exp()
         session["csrf"]=secrets.token_hex(16)
         session["ph"]=get("admin_hash")[:16]
         return redirect("/")
@@ -525,7 +557,7 @@ def login():
 def index():
     if not valid_session():
         return redirect("/login")
-    return render_template("index.html",csrf=session["csrf"],domain=get("domain",""),version=VERSION)
+    return render_template("index.html",csrf=session["csrf"],domain=get("domain",""),version=VERSION,tz=panel_tz())
 @app.post("/api/logout")
 @auth
 def logout():
@@ -651,7 +683,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"banner":get("banner","")}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"banner":get("banner",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -679,6 +711,13 @@ def settings_set():
         upd["cap_basis"]=d["cap_basis"]
     if d.get("reset"):
         upd.update({"m_rx":0,"m_tx":0,"m_off":0})
+    if "tz" in d:
+        v=str(d["tz"]).strip()
+        if v and not (v.split("/")[0] in TZ_AREAS and tz_ok(v)):
+            return err("bad_tz")
+        upd["tz"]=v
+    if "tz_utc" in d:
+        upd["tz_utc"]="1" if d["tz_utc"] else "0"
     if "public_page" in d:
         upd["public_page"]="1" if d["public_page"] else "0"
     if "banner" in d:
@@ -844,26 +883,20 @@ def domain_set():
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
-LATEST=[0,""]
 LATEST_URL="https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/main/panel/VERSION"
 @app.get("/api/system/latest")
 @auth
 def latest_version():
-    now=time.time()
-    if now-LATEST[0]>(600 if LATEST[1] else 60):
+    v=""
+    try:
+        req=Request(LATEST_URL+"?t=%d"%int(time.time()*1000),headers={"User-Agent":"isile","Cache-Control":"no-cache, no-store","Pragma":"no-cache"})
+        with urlopen(req,timeout=6) as r:
+            v=r.read(256).decode("utf-8","replace").strip().splitlines()[0].strip()
+    except Exception:
         v=""
-        try:
-            with urlopen(Request(LATEST_URL,headers={"User-Agent":"isile","Cache-Control":"no-cache"}),timeout=6) as r:
-                v=r.read(256).decode("utf-8","replace").strip().splitlines()[0].strip()
-        except Exception:
-            v=""
-        if not re.match(r"^[0-9A-Za-z .+_-]{1,32}$",v):
-            v=""
-        LATEST[0]=now
-        LATEST[1]=v
-    if not LATEST[1]:
+    if not re.match(r"^[0-9A-Za-z .+_-]{1,32}$",v):
         return err("unavailable",502)
-    return jsonify(latest=LATEST[1])
+    return jsonify(latest=v)
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
@@ -1228,7 +1261,7 @@ def public_page(name):
     name=name.lower()
     if not public_on() or name in RESERVED or not NAME_RE.match(name):
         return "Not found",404
-    return render_template("public.html",name=name,version=VERSION)
+    return render_template("public.html",name=name,version=VERSION,tz=panel_tz())
 def main():
     cmd=sys.argv[1] if len(sys.argv)>1 else "serve"
     init_db()
@@ -1253,7 +1286,7 @@ def main():
     if cmd=="setdomain":
         put("domain",os.environ["VPN_DOMAIN"])
         return
-    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536)
+    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536,PERMANENT_SESSION_LIFETIME=timedelta(hours=24))
     with LOCK:
         c=db()
         nft_apply(c)
