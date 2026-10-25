@@ -1,4 +1,4 @@
-import os,sys,re,json,time,uuid,hmac,base64,socket,secrets,shutil,sqlite3,tempfile,functools,threading,traceback,subprocess
+import os,sys,re,json,time,uuid,hmac,base64,socket,calendar,secrets,shutil,sqlite3,tempfile,functools,threading,traceback,subprocess
 from datetime import timedelta,datetime,timezone
 from zoneinfo import ZoneInfo,available_timezones
 from shlex import quote as shq
@@ -64,7 +64,8 @@ def init_db():
     os.makedirs(DATA,mode=0o700,exist_ok=True)
     c=db()
     c.executescript("""CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,secret TEXT NOT NULL,uid INTEGER,created INTEGER NOT NULL,expires INTEGER NOT NULL DEFAULT 0,quota INTEGER NOT NULL DEFAULT 0,up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'active',manual INTEGER NOT NULL DEFAULT 0,note TEXT NOT NULL DEFAULT '');""")
+CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,secret TEXT NOT NULL,uid INTEGER,created INTEGER NOT NULL,expires INTEGER NOT NULL DEFAULT 0,quota INTEGER NOT NULL DEFAULT 0,up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'active',manual INTEGER NOT NULL DEFAULT 0,note TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS daily(d TEXT PRIMARY KEY,rx INTEGER NOT NULL DEFAULT 0,tx INTEGER NOT NULL DEFAULT 0);""")
     cols={r["name"] for r in c.execute("PRAGMA table_info(accounts)")}
     if "tls" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN tls TEXT NOT NULL DEFAULT 'tls'")
@@ -388,6 +389,42 @@ def reconcile(c):
                 ssh_lock(r["name"],new!="active")
         c.commit()
         xray_sync(c)
+DAYS={"last":""}
+def pnow():
+    try:
+        z=ZoneInfo(panel_tz())
+    except Exception:
+        z=timezone.utc
+    return datetime.now(z)
+def daily_add(drx,dtx):
+    if drx<=0 and dtx<=0:
+        return
+    n=pnow()
+    d=n.strftime("%Y-%m-%d")
+    c=db()
+    try:
+        c.execute("INSERT INTO daily(d,rx,tx) VALUES(?,?,?) ON CONFLICT(d) DO UPDATE SET rx=rx+excluded.rx,tx=tx+excluded.tx",(d,max(0,drx),max(0,dtx)))
+        if DAYS["last"]!=d:
+            c.execute("DELETE FROM daily WHERE d<?",((n-timedelta(days=400)).strftime("%Y-%m-%d"),))
+            DAYS["last"]=d
+        c.commit()
+    finally:
+        c.close()
+def month_days():
+    n=pnow()
+    dim=calendar.monthrange(n.year,n.month)[1]
+    rx=[0]*dim
+    tx=[0]*dim
+    c=db()
+    try:
+        for r in c.execute("SELECT d,rx,tx FROM daily WHERE d LIKE ?",("%04d-%02d-%%"%(n.year,n.month),)):
+            i=int(r["d"][8:10])-1
+            if 0<=i<dim:
+                rx[i]=r["rx"]
+                tx[i]=r["tx"]
+    finally:
+        c.close()
+    return {"y":n.year,"m":n.month,"today":n.day,"dim":dim,"rx":rx,"tx":tx}
 def track_traffic():
     rx,tx=net_totals()
     s=gets("month","m_rx","m_tx","m_off","last_rx","last_tx")
@@ -397,12 +434,19 @@ def track_traffic():
     off=int(s.get("m_off",0))
     if s.get("month")!=cur:
         m_rx=m_tx=off=0
+    drx=dtx=0
     if "last_rx" in s:
         lr=int(s["last_rx"])
         lt=int(s["last_tx"])
-        m_rx+=rx-lr if rx>=lr else rx
-        m_tx+=tx-lt if tx>=lt else tx
+        drx=rx-lr if rx>=lr else rx
+        dtx=tx-lt if tx>=lt else tx
+        m_rx+=drx
+        m_tx+=dtx
     puts({"month":cur,"m_rx":m_rx,"m_tx":m_tx,"m_off":off,"last_rx":rx,"last_tx":tx})
+    try:
+        daily_add(drx,dtx)
+    except Exception:
+        traceback.print_exc()
 def conn_cycle():
     global CONN
     now=time.time()
@@ -587,6 +631,23 @@ def cpu_pct():
     if not last or tot==last[1]:
         return 0.0
     return round(max(0.0,min(100.0,100*(1-(idle-last[0])/(tot-last[1])))),1)
+def cpu_cores():
+    out=[]
+    last=CPU.get("c",{})
+    cur={}
+    with open("/proc/stat") as f:
+        for l in f:
+            p=l.split()
+            if not p or not p[0].startswith("cpu") or not p[0][3:].isdigit():
+                continue
+            v=[int(x) for x in p[1:]]
+            idle=v[3]+v[4]
+            tot=sum(v)
+            cur[p[0]]=(idle,tot)
+            o=last.get(p[0])
+            out.append(0.0 if not o or tot==o[1] else round(max(0.0,min(100.0,100*(1-(idle-o[0])/(tot-o[1])))),1))
+    CPU["c"]=cur
+    return out
 def net_totals():
     rx=tx=0
     with open("/proc/net/dev") as f:
@@ -657,9 +718,10 @@ def stats():
     with open("/proc/uptime") as f:
         up=float(f.read().split()[0])
     rx,tx=net_totals()
-    o=dict(version=VERSION,cpu=cpu_pct(),cores=os.cpu_count() or 1,load=list(os.getloadavg()),mem_total=mem.get("MemTotal",0),mem_used=mem.get("MemTotal",0)-mem.get("MemAvailable",0),disk_total=du.total,disk_used=du.used,uptime=up,net_rx=rx,net_tx=tx,ts=time.time(),services=sv,domain=get("domain",""),host=host(),tls_on=tls_on())
+    o=dict(version=VERSION,cpu=cpu_pct(),core_pct=cpu_cores(),cores=os.cpu_count() or 1,load=list(os.getloadavg()),mem_total=mem.get("MemTotal",0),mem_used=mem.get("MemTotal",0)-mem.get("MemAvailable",0),disk_total=du.total,disk_used=du.used,uptime=up,net_rx=rx,net_tx=tx,ts=time.time(),services=sv,domain=get("domain",""),host=host(),tls_on=tls_on())
     o.update(month_info())
     o["ports"]=ports_info()
+    o["days"]=month_days()
     return jsonify(o)
 def cert_info(dom):
     p="/etc/letsencrypt/live/%s/fullchain.pem"%dom
@@ -711,6 +773,11 @@ def settings_set():
         upd["cap_basis"]=d["cap_basis"]
     if d.get("reset"):
         upd.update({"m_rx":0,"m_tx":0,"m_off":0})
+        n=pnow()
+        c=db()
+        c.execute("DELETE FROM daily WHERE d LIKE ?",("%04d-%02d-%%"%(n.year,n.month),))
+        c.commit()
+        c.close()
     if "tz" in d:
         v=str(d["tz"]).strip()
         if v and not (v.split("/")[0] in TZ_AREAS and tz_ok(v)):
@@ -934,6 +1001,7 @@ def sys_reset():
                 if r["proto"]=="ssh":
                     ssh_del(r["name"])
             c.execute("DELETE FROM accounts")
+            c.execute("DELETE FROM daily")
             c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','banner')")
             c.commit()
             puts({"m_rx":0,"m_tx":0,"m_off":0})
