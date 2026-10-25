@@ -453,9 +453,20 @@ def worker():
             traceback.print_exc()
 def err(code,status=400,detail=None):
     return jsonify(error=code,detail=detail),status
+def midnight_exp(tzo):
+    now=time.time()
+    try:
+        o=int(tzo)
+        if not -840<=o<=840:
+            raise ValueError
+        return (int((now-o*60)//86400)+1)*86400+o*60
+    except (TypeError,ValueError):
+        n=datetime.now().astimezone()
+        m=(n+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
+        return int(m.timestamp())
 def valid_session():
     h=get("admin_hash","")
-    return bool(session.get("u")) and session.get("ph")==h[:16]
+    return bool(session.get("u")) and session.get("ph")==h[:16] and session.get("exp",0)>time.time()
 def auth(f):
     @functools.wraps(f)
     def w(*a,**k):
@@ -501,8 +512,9 @@ def login():
     if ok_u and ok_p:
         FAILS.pop(ip,None)
         session.clear()
-        session.permanent=True
+        session.permanent=False
         session["u"]=1
+        session["exp"]=midnight_exp(request.form.get("tz"))
         session["csrf"]=secrets.token_hex(16)
         session["ph"]=get("admin_hash")[:16]
         return redirect("/")
@@ -876,6 +888,33 @@ def sys_uninstall():
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
+@app.post("/api/system/reset")
+@auth
+def sys_reset():
+    d=request.get_json(silent=True) or {}
+    if not check_password_hash(get("admin_hash",""),str(d.get("password",""))):
+        return err("wrong_password")
+    with LOCK:
+        c=db()
+        try:
+            for r in c.execute("SELECT name,proto FROM accounts").fetchall():
+                if r["proto"]=="ssh":
+                    ssh_del(r["name"])
+            c.execute("DELETE FROM accounts")
+            c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','banner')")
+            c.commit()
+            puts({"m_rx":0,"m_tx":0,"m_off":0})
+            apply_banner("")
+            nft_apply(c)
+            xray_sync(c)
+        except Exception as e:
+            traceback.print_exc()
+            return err("system",500,str(e)[-300:])
+        finally:
+            c.close()
+        for m in (CONN,ACTIVE,SPEED,SP_B,SSH_OVER):
+            m.clear()
+    return jsonify(ok=True)
 @app.get("/api/system/job")
 @auth
 def sys_job():
@@ -971,7 +1010,7 @@ def info(name):
     cn=CONN.get(n,{})
     act=r["status"]=="active" and (cn.get("n",0)>0 or time.time()-ACTIVE.get(n,0)<ACTIVE_TTL)
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on)
+    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"])
 def parse_common(d,creating):
     try:
         out={}
@@ -1214,7 +1253,7 @@ def main():
     if cmd=="setdomain":
         put("domain",os.environ["VPN_DOMAIN"])
         return
-    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",PERMANENT_SESSION_LIFETIME=timedelta(hours=12),MAX_CONTENT_LENGTH=65536)
+    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536)
     with LOCK:
         c=db()
         nft_apply(c)
