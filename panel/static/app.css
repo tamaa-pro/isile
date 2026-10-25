@@ -216,7 +216,8 @@ dialog::backdrop{background:rgba(5,8,20,.68);backdrop-filter:blur(3px)}
 .note-t{white-space:pre-wrap;word-break:break-word}
 
 /* selection: data stays selectable, interface chrome does not */
-input,textarea,select,td,.log,.tile-v,.tile-s,.kv b,.pt b,.li-h b,.li-r b,.pub-big,.pub-h h2,.ask,.hint,.err,.note-t{-webkit-user-select:text;user-select:text}
+dialog,.dlg-h,.dlg-f,.f>span,.f small,.chips,.seg,.cal,.toolbar,.srow-t,.item-h{-webkit-user-select:none;user-select:none}
+input,textarea,select,td,.log,.tile-v,.tile-s,.kv b,.pt b,.li-h b,.li-r b,.pub-big,.pub-h h2,.err,.note-t{-webkit-user-select:text;user-select:text}
 td .pb,td .pill,td .acts,td button,.kv-v .pill{-webkit-user-select:none;user-select:none}
 
 /* hover only on devices that really hover (no sticky hover after a tap) */
@@ -239,3 +240,11 @@ td .pb,td .pill,td .acts,td button,.kv-v .pill{-webkit-user-select:none;user-sel
 :focus-visible{outline:2px solid rgba(99,102,241,.55);outline-offset:2px}
 button:focus:not(:focus-visible),a:focus:not(:focus-visible){outline:0}
 input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
+
+.sw{position:relative;width:46px;height:26px;border-radius:99px;border:1px solid var(--line);background:var(--card2);cursor:pointer;padding:0;flex:none;transition:background-color .18s,border-color .18s}
+.sw i{position:absolute;top:2px;inset-inline-start:2px;width:20px;height:20px;border-radius:50%;background:var(--mut);transition:inset-inline-start .18s,background-color .18s}
+.sw.on{background:linear-gradient(135deg,var(--pri),var(--pri2));border-color:transparent}
+.sw.on i{inset-inline-start:22px;background:#fff}
+.sw:active{transform:scale(.96)}
+.tzbox.dis{opacity:.45;pointer-events:none}
+.tzbox .dd{display:block}

@@ -55,65 +55,67 @@ s=String(s).trim().replace(/[٠-٩]/g,c=>c.charCodeAt(0)-1632).replace(/[۰-۹]/
 const m=s.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})(?:\s*[-–,T]?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|ص|م)?)?$/i);
 if(!m)return null;
 const y=+m[1],mo=+m[2],d=+m[3];
-let h=base.getHours(),mi=base.getMinutes();
+let h=base.getUTCHours(),mi=base.getUTCMinutes();
 if(m[4]!==undefined){
 h=+m[4];mi=m[5]!==undefined?+m[5]:0;
 if(m[6]){if(h<1||h>12)return null;h=h%12+(/pm|م/i.test(m[6])?12:0)}else if(h>23)return null;
 if(mi>59)return null
 }
-const r=new Date(y,mo-1,d,h,mi,0,0);
-return r.getFullYear()===y&&r.getMonth()===mo-1&&r.getDate()===d?r:null
+const r=new Date(Date.UTC(y,mo-1,d,h,mi,0,0));
+return r.getUTCFullYear()===y&&r.getUTCMonth()===mo-1&&r.getUTCDate()===d?r:null
 };
 function dtField(init,onChange){
 const input=el('input',{dir:'ltr',autocomplete:'off',placeholder:'YYYY/MM/DD - hh:mm '+t('pm'),value:init?fmtDT(init):''});
-let cur=init?new Date(init):null,vw=new Date(cur||Date.now()),open=false;
-vw.setDate(1);
+let cur=init?new Date(init):null,vw=new Date(cur||W(Date.now())),open=false;
+vw.setUTCDate(1);
 const panel=el('div',{class:'cal',hidden:true});
 const toggle=el('button',{type:'button',class:'icon-btn',title:t('cal_open'),onclick:()=>{open=!open;panel.hidden=!open;toggle.classList.toggle('on',open);if(open)draw()}},ic('calendar-days'));
 const wrap=el('div',{class:'dtf'},el('div',{class:'inp-row'},input,toggle),panel);
 const rtl=LANG==='ar';
-const setCur=(d,keep)=>{cur=d;if(d){vw=new Date(d.getFullYear(),d.getMonth(),1)}if(!keep)input.value=d?fmtDT(d):'';input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()};
+const mk=(y,m,d,h=0,mi=0)=>new Date(Date.UTC(y,m,d,h,mi,0,0));
+const setCur=(d,keep)=>{cur=d;if(d){vw=mk(d.getUTCFullYear(),d.getUTCMonth(),1)}if(!keep)input.value=d?fmtDT(d):'';input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()};
 function draw(){
 const loc=(rtl?'ar':'en')+'-u-nu-latn';
-const mon=new Intl.DateTimeFormat(loc,{month:'long'}).format(vw);
-const ws=rtl?6:0,today=new Date();
-const first=new Date(vw.getFullYear(),vw.getMonth(),1);
-const lead=(first.getDay()-ws+7)%7;
+const mon=new Intl.DateTimeFormat(loc,{month:'long',timeZone:'UTC'}).format(vw);
+const ws=rtl?6:0,today=W(Date.now());
+const first=mk(vw.getUTCFullYear(),vw.getUTCMonth(),1);
+const lead=(first.getUTCDay()-ws+7)%7;
 const days=[];
-for(let i=0;i<42;i++){const d=new Date(vw.getFullYear(),vw.getMonth(),1-lead+i);days.push(d)}
-const same=(x,y)=>y&&x.getFullYear()===y.getFullYear()&&x.getMonth()===y.getMonth()&&x.getDate()===y.getDate();
-const wd=Array.from({length:7},(_,i)=>new Intl.DateTimeFormat(loc,{weekday:'short'}).format(new Date(2024,0,7+(ws+i)%7)));
-const nav=(n,icn,k)=>el('button',{type:'button',class:'icon-btn',title:t(k),onclick:()=>{vw=new Date(vw.getFullYear(),vw.getMonth()+n,1);draw()}},ic(icn));
+for(let i=0;i<42;i++)days.push(mk(vw.getUTCFullYear(),vw.getUTCMonth(),1-lead+i));
+const same=(x,y)=>y&&x.getUTCFullYear()===y.getUTCFullYear()&&x.getUTCMonth()===y.getUTCMonth()&&x.getUTCDate()===y.getUTCDate();
+const wd=Array.from({length:7},(_,i)=>new Intl.DateTimeFormat(loc,{weekday:'short',timeZone:'UTC'}).format(mk(2024,0,7+(ws+i)%7)));
+const nav=(n,icn,k)=>el('button',{type:'button',class:'icon-btn',title:t(k),onclick:()=>{vw=mk(vw.getUTCFullYear(),vw.getUTCMonth()+n,1);draw()}},ic(icn));
 const grid=el('div',{class:'cal-g'},
 ...wd.map(w=>el('span',{class:'cal-w'},w)),
-...days.map(d=>el('button',{type:'button',class:'cal-d'+(d.getMonth()!==vw.getMonth()?' o':'')+(same(d,today)?' td':'')+(same(d,cur)?' on':''),onclick:()=>{const b=cur||new Date();setCur(new Date(d.getFullYear(),d.getMonth(),d.getDate(),b.getHours(),b.getMinutes(),0,0))}},d.getDate())));
-const b=cur||new Date();
-const h12=b.getHours()%12||12,pm=b.getHours()>=12;
-const upd=(h,mi,p)=>{const x=cur?new Date(cur):new Date(b);x.setHours((h%12)+(p?12:0),mi,0,0);if(!cur){x.setFullYear(b.getFullYear(),b.getMonth(),b.getDate())}setCur(x)};
-const hd=dd(Array.from({length:12},(_,i)=>({v:i+1,l:p2(i+1)})),h12,v=>upd(v,b.getMinutes(),pm),78);
-const md=dd(Array.from({length:60},(_,i)=>({v:i,l:p2(i)})),b.getMinutes(),v=>upd(h12,v,pm),78);
-const ap=seg([{v:false,l:t('am')},{v:true,l:t('pm')}],pm,v=>upd(h12,b.getMinutes(),v));
+...days.map(d=>el('button',{type:'button',class:'cal-d'+(d.getUTCMonth()!==vw.getUTCMonth()?' o':'')+(same(d,today)?' td':'')+(same(d,cur)?' on':''),onclick:()=>{const b=cur||W(Date.now());setCur(mk(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),b.getUTCHours(),b.getUTCMinutes()))}},d.getUTCDate())));
+const b=cur||W(Date.now());
+const h12=b.getUTCHours()%12||12,pm=b.getUTCHours()>=12;
+const upd=(h,mi,p)=>{const x=cur?new Date(cur):new Date(b);x.setUTCHours((h%12)+(p?12:0),mi,0,0);if(!cur){x.setUTCFullYear(b.getUTCFullYear(),b.getUTCMonth(),b.getUTCDate())}setCur(x)};
+const hd=dd(Array.from({length:12},(_,i)=>({v:i+1,l:p2(i+1)})),h12,v=>upd(v,b.getUTCMinutes(),pm),78);
+const md=dd(Array.from({length:60},(_,i)=>({v:i,l:p2(i)})),b.getUTCMinutes(),v=>upd(h12,v,pm),78);
+const ap=seg([{v:false,l:t('am')},{v:true,l:t('pm')}],pm,v=>upd(h12,b.getUTCMinutes(),v));
 panel.dir=rtl?'rtl':'ltr';
 panel.replaceChildren(
-el('div',{class:'cal-h'},nav(-1,rtl?'chevron-right':'chevron-left','cal_prev'),el('b',{class:'cal-t'},mon+' '+vw.getFullYear()),nav(1,rtl?'chevron-left':'chevron-right','cal_next')),
+el('div',{class:'cal-h'},nav(-1,rtl?'chevron-right':'chevron-left','cal_prev'),el('b',{class:'cal-t'},mon+' '+vw.getUTCFullYear()),nav(1,rtl?'chevron-left':'chevron-right','cal_next')),
 grid,
 el('div',{class:'tm'},hd,el('b',{},':'),md,ap))
 }
 input.addEventListener('input',()=>{
 const v=input.value.trim();
 if(!v){cur=null;input.classList.remove('bad');onChange&&onChange(null);if(open)draw();return}
-const d=parseDT(v,cur||new Date());
-if(d){cur=d;vw=new Date(d.getFullYear(),d.getMonth(),1);input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()}else input.classList.add('bad')
+const d=parseDT(v,cur||W(Date.now()));
+if(d){cur=d;vw=mk(d.getUTCFullYear(),d.getUTCMonth(),1);input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()}else input.classList.add('bad')
 });
 input.addEventListener('blur',()=>{if(cur&&!input.classList.contains('bad'))input.value=fmtDT(cur)});
-return{el:wrap,set:d=>setCur(d),get:()=>{const v=input.value.trim();if(!v)return{ok:true,d:null};const d=parseDT(v,cur||new Date());return d?{ok:true,d}:{ok:false}}}
+return{el:wrap,set:d=>setCur(d),get:()=>{const v=input.value.trim();if(!v)return{ok:true,d:null};const d=parseDT(v,cur||W(Date.now()));return d?{ok:true,d}:{ok:false}}}
 }
-const dchips=(vals,f)=>el('div',{class:'chips'},...vals.map(n=>el('button',{type:'button',class:'chip',onclick:()=>{if(!n){f.set(null);return}const d=new Date();d.setSeconds(0,0);d.setDate(d.getDate()+n);f.set(d)}},n===0?ic('infinity'):t('d_short',n))));
+const dchips=(vals,f)=>el('div',{class:'chips'},...vals.map(n=>el('button',{type:'button',class:'chip',onclick:()=>{if(!n){f.set(null);return}const d=W(Date.now());d.setUTCSeconds(0,0);d.setUTCDate(d.getUTCDate()+n);f.set(d)}},n===0?ic('infinity'):t('d_short',n))));
 const chips=(vals,input)=>el('div',{class:'chips'},...vals.map(v=>el('button',{type:'button',class:'chip',onclick:()=>{input.value=v}},v===0?ic('infinity'):v)));
 const meter=(p,c='')=>{const i=el('i');i.style.width=Math.max(0,Math.min(100,p))+'%';return el('div',{class:'meter '+c},i)};
 const liveDot=on=>el('span',{class:'dot'+(on?' live':''),title:t(on?'live_on':'live_off')});
 const connPill=a=>{const L=a.conn_limit;return el('span',{class:'pill ltr '+(a.conn>0?(L&&a.conn>=L?'warn':'ok'):'off')},ic('plug'),a.conn+' / '+(L||'∞'))};
 const badge=p=>el('span',{class:'pb p-'+p},ic(PM[p].i),PM[p].n);
+const sw=(on,f)=>{const b=el('button',{type:'button',class:'sw'+(on?' on':''),role:'switch','aria-checked':String(!!on),onclick:()=>{on=!on;b.classList.toggle('on',on);b.setAttribute('aria-checked',String(on));f(on)}},el('i'));return b};
 const pill=(c,l)=>el('span',{class:'pill '+c},l);
 function ask(msg,okLabel,onOk,o={}){
 const d=modal(o.title||t('confirm'),el('div',{},el('p',{class:'ask'},msg),o.extra||null),[btn(okLabel,o.danger===false?'check':'triangle-exclamation',async()=>{if(await onOk()!==false)d.close()},o.danger===false?'pri':'dgr'),btn(t('cancel'),'xmark',()=>d.close())]);
@@ -253,9 +255,9 @@ const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',tr
 const name=el('input',{placeholder:'user1',maxlength:20,autocomplete:'off',dir:'ltr',value:ed?a.name:''});
 if(ed)name.disabled=true;
 const secret=el('input',{autocomplete:'off',dir:'ltr',placeholder:ed?t('f_keep'):t('f_auto')});
-const org=ed&&a.expires?new Date(a.expires*1000):null;
-if(org)org.setSeconds(0,0);
-const startD=ed?org:(()=>{const n=new Date();n.setSeconds(0,0);return n})();
+const org=ed&&a.expires?W(a.expires*1000):null;
+if(org)org.setUTCSeconds(0,0);
+const startD=ed?org:(()=>{const n=W(Date.now());n.setUTCSeconds(0,0);return n})();
 const expF=dtField(startD);
 const quota=el('input',{type:'number',min:0,step:'any',value:ed&&a.quota?+(a.quota/GB).toFixed(3):0});
 const connLim=el('input',{type:'number',min:0,max:1000,step:1,value:ed?(a.conn_limit||0):0});
@@ -296,7 +298,7 @@ btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
 const x=expF.get();
 if(!x.ok){toast(t('e_bad_date'));return}
 const b={secret:secret.value,quota_gb:quota.value,conn_limit:st.kind==='v2'?0:connLim.value,note:note.value,tls:st.tls,transport:st.transport};
-if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(x.d.getTime()/1000):0;
+if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(U(x.d)/1000):0;
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
 else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/accounts',{...b,proto,name:name.value});d.close();await loadAcc();drawRows();infoDlg(r.name)}
@@ -357,6 +359,15 @@ try{await api('POST','/api/system/uninstall',{password:pw.value})}catch(e){terr(
 const ov=overlay(t('sys_w_uninstall'));
 setTimeout(()=>ov.replaceChildren(el('div',{class:'ovl-b'},ic('circle-check','ovl-i ok-i'),el('div',{class:'ovl-t'},t('sys_removed')))),9000)
 },{extra:pw});
+let tzR=s.tz_region,tzU=!!s.tz_utc;
+const tzNames=(s.tz_list&&s.tz_list.length?s.tz_list:[]).slice();
+if(!tzNames.includes(tzR))tzNames.unshift(tzR);
+const saveTz=async b=>{try{await api('POST','/api/settings',b);TZ=tzU?'UTC':tzR;toast(t('lim_saved'))}catch(e){terr(e)}};
+const tzDd=dd(tzNames.map(n=>({v:n,l:n})),tzR,v=>{tzR=v;saveTz({tz:v})},260);
+const tzBox=el('div',{class:'tzbox'},tzDd);
+const tzApply=()=>{tzBox.classList.toggle('dis',tzU);tzDd.querySelector('.dd-b').disabled=tzU};
+tzApply();
+const tzSw=sw(tzU,v=>{tzU=v;tzApply();saveTz({tz_utc:v})});
 const pwr=el('input',{type:'password',autocomplete:'current-password',placeholder:t('sys_uninstall_pw')});
 const doReset=()=>ask(t('sys_reset_confirm'),t('sys_reset'),async()=>{
 try{await api('POST','/api/system/reset',{password:pwr.value})}catch(e){terr(e);return false}
@@ -380,7 +391,9 @@ $('#view').replaceChildren(el('div',{class:'grid g2'},
 panel('palette',t('s_appearance'),el('div',{class:'form'},
 field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],th,v=>{localStorage.setItem('theme',v);document.documentElement.dataset.theme=v})),
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
-field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')))),
+field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
+field(t('s_tz'),tzBox,t('s_tz_hint')),
+el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw))),
 panel('key',t('s_security'),el('div',{class:'form'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),btn(t('s_change'),'floppy-disk',savePw,'pri'))),
 panel('globe',t('dm_title'),el('div',{class:'form'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('gauge-high',t('lim_title'),el('div',{class:'form'},
@@ -399,11 +412,13 @@ row('cloud-arrow-down',t('sys_update'),t('sys_update_desc'),btn('','cloud-arrow-
 row('broom',t('sys_reset'),t('sys_reset_desc'),btn('','broom',doReset,'dgr')),
 row('trash',t('sys_uninstall'),t('sys_uninstall_desc'),btn('','trash',doUninstall,'dgr'))))))
 }
+const RAW='https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/main/panel/VERSION';
+const fetchLatest=async()=>{try{const r=await fetch(RAW+'?t='+Date.now(),{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer'});if(!r.ok)throw 0;const v=(await r.text()).trim().split('\n')[0].trim();if(!/^[0-9A-Za-z .+_-]{1,32}$/.test(v))throw 0;return{latest:v}}catch(e){return api('GET','/api/system/latest')}};
 function latestRow(){
 const b=el('b',{class:'ltr'},'…');
 const g=el('div',{class:'kv-v'},b);
 const d=el('div',{class:'kv'},el('span',{},t('sys_latest')),g);
-api('GET','/api/system/latest').then(r=>{b.textContent=r.latest;g.prepend(r.latest===VERSION?pill('ok',t('sys_uptodate')):pill('warn',t('sys_new')))}).catch(()=>{b.textContent=t('sys_latest_err')});
+fetchLatest().then(r=>{b.textContent=r.latest;g.prepend(r.latest===VERSION?pill('ok',t('sys_uptodate')):pill('warn',t('sys_new')))}).catch(()=>{b.textContent=t('sys_latest_err')});
 return d}
 function setLang(v){
 localStorage.setItem('lang',v);
