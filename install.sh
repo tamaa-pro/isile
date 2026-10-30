@@ -47,6 +47,9 @@ if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
 . /etc/os-release
 [ "$ID" = "ubuntu" ] || die "Ubuntu only (found: $ID)"
 OLDV="$(cat "$APP/panel/VERSION" 2>/dev/null || echo none)"
+UDPC=no
+WANT_XRAY=1
+WANT_WS=1
 if [ "$MODE" = install ]; then
 STEP="reading settings"
 read -rp "Domain (press Enter to skip and use the server address without TLS): " DOMAIN </dev/tty
@@ -75,9 +78,36 @@ read -rp "Continue anyway? [y/N]: " YN </dev/tty
 [[ "$YN" =~ ^[Yy]$ ]] || die "domain does not point to this server"
 fi
 fi
+STEP="optional components"
+if [ "${ISILE_UDPC:-}" = yes ]; then
+UDPC=yes
+elif [ -z "${ISILE_UDPC:-}" ]; then
+echo
+echo "=================================================="
+echo "  Optional: UDP Custom (SSH over UDP)"
+echo "=================================================="
+echo " SECURITY WARNING"
+echo " UDP Custom is a third-party CLOSED-SOURCE binary (by ePro Dev Team). Its code"
+echo " cannot be reviewed, and it is NOT part of this repository or written by it."
+echo " It will be downloaded from the upstream repository (branch main, not pinned):"
+echo "   ${UDPC_URL:-https://github.com/http-custom/udp-custom/raw/main/bin/udp-custom-linux-amd64}"
+echo " The upstream publishes no checksum, so you are trusting whoever controls that"
+echo " repository, and the binary may change over time. To limit the risk, it runs as an"
+echo " unprivileged user, sandboxed, and any NEW outbound connection it tries to"
+echo " open (except to the local SSH server) is blocked by the firewall."
+echo " You can remove it at any time from the panel: Settings > Components."
+read -rp "Install UDP Custom together with the other services? [y/N]: " YN </dev/tty
+if [[ "$YN" =~ ^[Yy]$ ]]; then UDPC=yes; fi
+fi
+if [ "$UDPC" = yes ] && [ "$(uname -m)" != x86_64 ] && [ -z "${UDPC_URL:-}" ]; then
+echo "UDP Custom has no default binary for $(uname -m), skipping it (set UDPC_URL to use your own)."
+UDPC=no
+fi
 else
 STEP="reading current settings"
 [ -f "$DATA/panel.db" ] || die "isile is not installed, run the install command instead"
+if [ "$(dbget comp_xray)" = 0 ]; then WANT_XRAY=0; fi
+if [ "$(dbget comp_wsbridge)" = 0 ]; then WANT_WS=0; fi
 DOMAIN="$(dbget domain)"
 SERVER_IP="$(detect_ip)"
 EMAIL=""
@@ -120,19 +150,11 @@ rm -rf "$FA_DIR"
 fi
 fi
 STEP="installing Xray"
+if [ "$WANT_XRAY" = 1 ]; then
 echo "[4/8] Installing Xray"
-if [ ! -x /usr/local/bin/xray ]; then
-case "$(uname -m)" in x86_64) XA=64;; aarch64) XA=arm64-v8a;; *) die "unsupported architecture $(uname -m)";; esac
-XU="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-$XA.zip"
-curl -fsSL -o "$TMP/x.zip" "$XU" || die "cannot download Xray"
-curl -fsSL -o "$TMP/x.dgst" "$XU.dgst" || die "cannot download Xray checksum"
-EXP="$(grep -i 'sha2-256\|sha256' "$TMP/x.dgst" | grep -oE '[0-9a-fA-F]{64}' | head -1 | tr 'A-F' 'a-f' || true)"
-ACT="$(sha256sum "$TMP/x.zip" | cut -d' ' -f1)"
-[ -n "$EXP" ] && [ "$EXP" = "$ACT" ] || die "Xray checksum mismatch"
-L unzip -oq "$TMP/x.zip" -d "$TMP/x"
-install -m755 "$TMP/x/xray" /usr/local/bin/xray
-install -d /usr/local/share/xray
-install -m644 "$TMP/x/geoip.dat" "$TMP/x/geosite.dat" /usr/local/share/xray/
+bash "$APP/panel/components.sh" install xray >>"$LOG" 2>&1 || die "Xray installation failed"
+else
+echo "[4/8] Xray was removed from the panel, skipping"
 fi
 rm -rf "$TMP"
 STEP="configuring SSH"
@@ -192,46 +214,10 @@ systemctl enable --now certbot.timer >>"$LOG" 2>&1 || true
 fi
 STEP="creating services"
 echo "[7/8] Creating services"
-cat > /etc/systemd/system/xray.service <<EOT
-[Unit]
-Description=Xray
-After=network.target
-[Service]
-User=xray
-Group=xray
-LogsDirectory=xray
-Environment=XRAY_LOCATION_ASSET=/usr/local/share/xray
-ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
-Restart=always
-RestartSec=3
-LimitNOFILE=65535
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-[Install]
-WantedBy=multi-user.target
-EOT
 rm -f /etc/logrotate.d/vpnpanel-xray /var/log/xray/access.log /var/lib/vpnpanel/v2claims.json /opt/vpnpanel/panel/v2conn.py
-cat > /etc/systemd/system/vpnbridge.service <<EOT
-[Unit]
-Description=SSH WebSocket bridge
-After=network.target
-[Service]
-User=nobody
-Group=nogroup
-Environment=SSH_PORT=$SSH_PORT
-ExecStart=/usr/bin/python3 $APP/panel/wsbridge.py
-Restart=always
-RestartSec=3
-LimitNOFILE=65535
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-[Install]
-WantedBy=multi-user.target
-EOT
+if [ "$WANT_WS" = 1 ]; then
+SSH_PORT="$SSH_PORT" bash "$APP/panel/components.sh" install wsbridge >>"$LOG" 2>&1 || die "SSH WebSocket bridge installation failed"
+fi
 cat > /etc/systemd/system/vpnmux.service <<EOT
 [Unit]
 Description=SSH SSL multiplexer (ports 80 and 443)
@@ -293,6 +279,15 @@ chmod 600 "$DATA/panel.db"
 install -m755 "$APP/panel/isile.sh" /usr/local/bin/isile
 STEP="configuring nginx"
 bash "$APP/panel/setdomain.sh" --render "$DOMAIN" >>"$LOG" 2>&1 || die "nginx configuration failed"
+if [ "$UDPC" = yes ]; then
+STEP="installing UDP Custom"
+echo "Installing UDP Custom (optional)"
+if ! bash "$APP/panel/components.sh" install udpcustom >>"$LOG" 2>&1; then
+echo "Warning: UDP Custom could not be installed (see $LOG). Continuing without it."
+fi
+elif [ -x /usr/local/lib/isile/udp-custom/udp-custom ]; then
+bash "$APP/panel/components.sh" refresh udpcustom >>"$LOG" 2>&1 || echo "Warning: could not refresh the UDP Custom service files (see $LOG)"
+fi
 STEP="starting services and firewall"
 echo "[8/8] Starting services"
 L ufw allow "$SSH_PORT/tcp"
@@ -301,13 +296,17 @@ if [ -n "$DOMAIN" ]; then L ufw allow 443/tcp; fi
 L ufw allow 2080/tcp
 L ufw --force enable
 L systemctl daemon-reload
-L systemctl enable vpnpanel vpnbridge vpnmux xray
-L systemctl restart vpnbridge
+EN="vpnpanel vpnmux"
+if [ -f /etc/systemd/system/vpnbridge.service ]; then EN="$EN vpnbridge"; fi
+if [ -f /etc/systemd/system/xray.service ]; then EN="$EN xray"; fi
+L systemctl enable $EN
+if [ -f /etc/systemd/system/vpnbridge.service ]; then L systemctl restart vpnbridge; fi
 L systemctl restart vpnpanel
 sleep 3
-L systemctl restart xray
+if [ -f /etc/systemd/system/xray.service ]; then L systemctl restart xray; fi
 L systemctl restart nginx
 L systemctl restart vpnmux
+if [ -f /etc/systemd/system/udp-custom.service ]; then L systemctl try-restart udp-custom; fi
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 L systemctl enable vpnstunnel
 L systemctl restart vpnstunnel
@@ -315,8 +314,12 @@ else
 systemctl disable --now vpnstunnel >>"$LOG" 2>&1 || true
 fi
 STEP="verifying services"
-SVCS="vpnpanel vpnbridge vpnmux xray nginx"
-if [ -s /etc/vpnpanel/stunnel.conf ]; then SVCS="$SVCS vpnstunnel"; fi
+"$APP/venv/bin/python" "$APP/panel/app.py" applycomps >>"$LOG" 2>&1 || true
+SVCS="$("$APP/venv/bin/python" "$APP/panel/app.py" svcs 2>>"$LOG" || true)"
+[ -n "$SVCS" ] || SVCS="vpnpanel vpnmux nginx"
+UDPON=no
+case " $SVCS " in *" udp-custom "*) UDPON=yes;; esac
+SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /')"
 for s in $SVCS; do
 ok=0
 for i in $(seq 1 20); do
@@ -328,6 +331,10 @@ journalctl -u "$s" -n 12 --no-pager >>"$LOG" 2>&1 || true
 die "service $s is not running"
 fi
 done
+if [ "$UDPON" = yes ] && ! systemctl is-active --quiet udp-custom; then
+journalctl -u udp-custom -n 12 --no-pager >>"$LOG" 2>&1 || true
+echo "Warning: UDP Custom is not running (optional component, see $LOG). You can remove it from Settings > Components."
+fi
 STEP="verifying connection paths"
 CODE=000
 for i in $(seq 1 15); do
@@ -390,6 +397,10 @@ echo " No domain: the panel and connections use plain HTTP without TLS."
 echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS). TLS needs a domain."
 echo " You can add a domain later from the panel Settings."
+fi
+if systemctl is-active --quiet udp-custom; then
+echo " UDP Custom is running: also open its UDP port (default 36712) in the cloud firewall."
+echo " It can be removed any time from Settings > Components in the panel."
 fi
 echo " Type  isile  to open the management menu:"
 echo "   1) Edit admin credentials"
