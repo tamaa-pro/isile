@@ -24,9 +24,15 @@ const kv=(l,v,x)=>el('div',{class:'kv'},el('span',{},l),x?el('div',{class:'kv-v'
 const SI={active:'circle-check',disabled:'ban',expired:'circle-xmark',limit:'triangle-exclamation'};
 const sti=a=>el('span',{class:'sti '+SC[a.status],title:t('st_'+a.status)},ic(SI[a.status]||'circle'));
 const copy=async v=>{try{await navigator.clipboard.writeText(v);toast(t('copied'))}catch{toast(t('copy_fail'))}};
-const modal=(title,body,btns=[],cls='')=>{const d=el('dialog',{class:cls},el('div',{class:'dlg-h'},el('h3',{},title),el('button',{class:'icon-btn',title:t('close'),onclick:()=>d.close()},ic('xmark'))),el('div',{class:'dlg-b'},body),btns.length?el('div',{class:'dlg-f'},...btns):null);d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();return d};
+const modal=(title,body,btns=[],cls='')=>{const d=el('dialog',{class:cls},el('div',{class:'dlg-h'},el('h3',{},title),el('button',{class:'icon-btn',title:t('close'),onclick:()=>d.close()},ic('xmark'))),el('div',{class:'dlg-b'},body),btns.length?el('div',{class:'dlg-f'},...btns):null);d.addEventListener('close',()=>d.remove());const cl=d.close.bind(d);d.close=()=>{if(!d.open||d.classList.contains('cl'))return;d.classList.add('cl');setTimeout(()=>cl(),170)};d.addEventListener('cancel',e=>{e.preventDefault();d.close()});document.body.append(d);d.showModal();return d};
 const btn=(label,icon,f,c='')=>el('button',{class:'btn '+c,type:'button',onclick:f},icon?ic(icon):null,label?el('span',{},label):null);
-const seg=(opts,val,on)=>{const box=el('div',{class:'seg'});const draw=()=>box.replaceChildren(...opts.map(o=>el('button',{type:'button',class:o.v===val?'on':'',disabled:!!o.dis,onclick:()=>{val=o.v;on(val);draw()}},o.i?ic(o.i):null,el('span',{},o.l))));draw();box.upd=(o2,v2)=>{opts=o2;val=v2;draw()};return box};
+const seg=(opts,val,on)=>{const box=el('div',{class:'seg'});const thumb=el('i',{class:'seg-i'});let btns=null;
+const place=()=>{const b=box.querySelector('button.on');if(!box.offsetWidth)return;if(!b){thumb.style.opacity=0;return}thumb.style.opacity=1;thumb.style.width=b.offsetWidth+'px';thumb.style.height=b.offsetHeight+'px';thumb.style.transform='translate('+b.offsetLeft+'px,'+b.offsetTop+'px)'};
+const draw=()=>{const same=btns&&btns.length===opts.length&&btns.every((x,i)=>x.dataset.v===String(opts[i].v));
+if(!same){btns=opts.map((o,i)=>{const x=el('button',{type:'button',onclick:()=>{const q=opts[i];val=q.v;on(val);draw()}},o.i?ic(o.i):null,el('span',{},o.l));x.dataset.v=String(o.v);return x});box.replaceChildren(thumb,...btns)}
+btns.forEach((x,i)=>{x.classList.toggle('on',opts[i].v===val);x.disabled=!!opts[i].dis;x.lastChild.textContent=opts[i].l});place()};
+draw();new ResizeObserver(()=>{place();if(box.offsetWidth&&!thumb.classList.contains('rdy'))requestAnimationFrame(()=>thumb.classList.add('rdy'))}).observe(box);box.upd=(o2,v2)=>{opts=o2;val=v2;draw()};return box};
+const clp=(n,shut)=>{const w=el('div',{class:'clp'+(shut?' shut':' done')},el('div',{class:'clp-i'},n));let tm;w.set=s=>{if(w.classList.contains('shut')===s)return;clearTimeout(tm);w.classList.remove('done');w.classList.toggle('shut',s);if(!s)tm=setTimeout(()=>w.classList.add('done'),480)};return w};
 function dd(opts,val,on,mw=170,ph){
 const lab=el('span',{class:'dd-l'});
 const b=el('button',{type:'button',class:'dd-b'},lab,ic('chevron-down','dd-c'));
@@ -34,7 +40,7 @@ const wrap=el('div',{class:'dd'},b);
 let pop=null;
 const dot=c=>{const d=el('span',{class:'sdot'});d.style.background=c;return d};
 const set=v=>{val=v;const o=opts.find(o=>o.v===v);if(!o&&ph){lab.replaceChildren(ph);return}const x=o||opts[0];lab.replaceChildren(...(x.c?[dot(x.c)]:[]),x.l)};
-function close(){if(!pop)return;pop.remove();pop=null;wrap.classList.remove('open');document.removeEventListener('mousedown',out,true);document.removeEventListener('keydown',key,true);document.removeEventListener('scroll',sc,true);window.removeEventListener('resize',close)}
+function close(){if(!pop)return;const p=pop;pop=null;p.classList.add('out');setTimeout(()=>p.remove(),140);wrap.classList.remove('open');document.removeEventListener('mousedown',out,true);document.removeEventListener('keydown',key,true);document.removeEventListener('scroll',sc,true);window.removeEventListener('resize',close)}
 function out(e){if(pop&&!pop.contains(e.target)&&!b.contains(e.target))close()}
 function key(e){if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close()}}
 function sc(e){if(pop&&!pop.contains(e.target))close()}
@@ -72,9 +78,9 @@ function dtField(init,onChange){
 const input=el('input',{dir:'ltr',autocomplete:'off',placeholder:'YYYY/MM/DD - hh:mm '+t('pm'),value:init?fmtDT(init):''});
 let cur=init?new Date(init):null,vw=new Date(cur||W(Date.now())),open=false;
 vw.setUTCDate(1);
-const panel=el('div',{class:'cal',hidden:true});
-const toggle=el('button',{type:'button',class:'icon-btn',title:t('cal_open'),onclick:()=>{open=!open;panel.hidden=!open;toggle.classList.toggle('on',open);if(open)draw()}},ic('calendar-days'));
-const wrap=el('div',{class:'dtf'},el('div',{class:'inp-row'},input,toggle),panel);
+const panel=el('div',{class:'cal'});const cw=clp(panel,true);
+const toggle=el('button',{type:'button',class:'icon-btn',title:t('cal_open'),onclick:()=>{open=!open;toggle.classList.toggle('on',open);if(open)draw();cw.set(!open)}},ic('calendar-days'));
+const wrap=el('div',{class:'dtf'},el('div',{class:'inp-row'},input,toggle),cw);
 const rtl=LANG==='ar';
 const mk=(y,m,d,h=0,mi=0)=>new Date(Date.UTC(y,m,d,h,mi,0,0));
 const setCur=(d,keep)=>{cur=d;if(d){vw=mk(d.getUTCFullYear(),d.getUTCMonth(),1)}if(!keep)input.value=d?fmtDT(d):'';input.classList.remove('bad');onChange&&onChange(cur);if(open)draw()};
@@ -88,7 +94,7 @@ const days=[];
 for(let i=0;i<42;i++)days.push(mk(vw.getUTCFullYear(),vw.getUTCMonth(),1-lead+i));
 const same=(x,y)=>y&&x.getUTCFullYear()===y.getUTCFullYear()&&x.getUTCMonth()===y.getUTCMonth()&&x.getUTCDate()===y.getUTCDate();
 const wd=Array.from({length:7},(_,i)=>new Intl.DateTimeFormat(loc,{weekday:'short',timeZone:'UTC'}).format(mk(2024,0,7+(ws+i)%7)));
-const nav=(n,icn,k)=>el('button',{type:'button',class:'icon-btn',title:t(k),onclick:()=>{vw=mk(vw.getUTCFullYear(),vw.getUTCMonth()+n,1);draw()}},ic(icn));
+const nav=(n,icn,k)=>el('button',{type:'button',class:'icon-btn',title:t(k),onclick:()=>{vw=mk(vw.getUTCFullYear(),vw.getUTCMonth()+n,1);draw();const g=panel.querySelector('.cal-g');if(g&&g.animate)g.animate([{opacity:0,transform:'translateX('+(n*(rtl?-1:1)*16)+'px)'},{opacity:1,transform:'none'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'})}},ic(icn));
 const grid=el('div',{class:'cal-g'},
 ...wd.map(w=>el('span',{class:'cal-w'},w)),
 ...days.map(d=>el('button',{type:'button',class:'cal-d'+(d.getUTCMonth()!==vw.getUTCMonth()?' o':'')+(same(d,today)?' td':'')+(same(d,cur)?' on':''),onclick:()=>{const b=cur||W(Date.now());setCur(mk(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),b.getUTCHours(),b.getUTCMinutes()))}},d.getUTCDate())));
@@ -386,6 +392,7 @@ const boxTls=el('label',{class:'f'},el('span',{},t('f_tls')),tlsSeg,tlsHintTxt);
 const boxTransport=field(t('f_transport'),transportSeg,t('f_transport_hint'));
 const boxKind=field(t('f_type'),kindSeg);
 const boxConn=el('div',{class:'f'},el('span',{},t('f_conn_limit')),connLim,chips([1,2,3,5,0],connLim),connHint);
+const cProto=clp(boxProto,true),cTransport=clp(boxTransport,true),cTls=clp(boxTls,true),cTlsHint=clp(tlsHint,true),cUnav=clp(unav,true),cConn=clp(boxConn,true);
 function sync(){
 if(!ed){
 if(!kindOk(st.kind))st.kind=kindOk('ssh')?'ssh':'v2';
@@ -396,19 +403,19 @@ else if(!forced&&!tlsOk(st.tls))st.tls=['both','plain','tls'].find(tlsOk)||st.tl
 }
 const v2=st.kind==='v2',udp=isUdp();
 kindSeg.upd(kindOpts(),st.kind);protoSeg.upd(protoOpts(),st.proto);transportSeg.upd(trOpts(),st.transport);tlsSeg.upd(tlsOpts(),st.tls);
-boxProto.hidden=!v2||ed;boxTransport.hidden=v2;boxTls.hidden=forced||udp;tlsHint.hidden=!forced||udp;
-unav.hidden=!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!boxTls.hidden&&tlsOpts().some(o=>o.dis))));
+cProto.set(!v2||ed);cTransport.set(v2);cTls.set(forced||udp);cTlsHint.set(!forced||udp);
+cUnav.set(!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!(forced||udp)&&tlsOpts().some(o=>o.dis)))));
 tlsHintTxt.textContent=t(!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
-boxConn.hidden=v2;connHint.textContent=t('f_conn_limit_ssh');
+cConn.set(v2);connHint.textContent=t('f_conn_limit_ssh');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
-ed?null:boxKind,boxProto,boxTransport,boxTls,tlsHint,unav,
+ed?null:boxKind,cProto,cTransport,cTls,cTlsHint,cUnav,
 field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],expF),el('small',{class:'muted'},t('f_exp_hint'))),
 el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota)),
-boxConn,
+cConn,
 field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
@@ -444,7 +451,7 @@ const BL=[
 {c:'sshssl',i:'lock',n:'SSH SSL',d:'cb_ssl_desc',rows:[['sshssl','tls'],['sshssl','plain']]},
 {c:'udpcustom',i:'tower-broadcast',n:'UDP Custom',d:'cb_udp_desc',rows:[['sshudp','udp']]},
 {c:'xray',i:'bolt',n:'Xray',d:'cb_xray_desc',rows:V2R}];
-const box=el('div',{class:'kvs'},el('div',{class:'empty'},ic('spinner','fa-spin')));
+const box=el('div',{class:'kvs cols lg'},el('div',{class:'empty'},ic('spinner','fa-spin')));
 let R=null;
 const fill=async()=>{
 try{R=await api('GET','/api/components');box.replaceChildren(el('div',{class:'muted sm'},t('cb_desc')),...BL.map(draw),el('div',{class:'muted sm'},t('svc_legend')))}catch(e){terr(e)}
@@ -550,7 +557,7 @@ toast(t('sys_reset_done'));setTimeout(()=>location.reload(),900)
 const bn=el('textarea',{rows:5,maxlength:2000,dir:'auto',placeholder:t('bn_ph')});
 bn.value=s.banner||'';
 const saveBn=async(v)=>{try{await api('POST','/api/settings',{banner:v});if(v==='')bn.value='';toast(t('bn_saved'))}catch(e){terr(e)}};
-const lgBox=el('div',{class:'kvs'},el('div',{class:'empty'},ic('spinner','fa-spin')));
+const lgBox=el('div',{class:'kvs cols lg'},el('div',{class:'empty'},ic('spinner','fa-spin')));
 const fillLogs=async()=>{
 try{
 const r=await api('GET','/api/logs');
@@ -561,17 +568,17 @@ el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.
 }catch(e){terr(e)}
 };
 fillLogs();
-$('#view').replaceChildren(el('div',{class:'grid g2'},
-panel('palette',t('s_appearance'),el('div',{class:'form'},
+$('#view').replaceChildren(el('div',{class:'stack'},
+panel('palette',t('s_appearance'),el('div',{class:'form cols'},
 themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
 field(t('s_tz'),tzBox,t('s_tz_hint')),
 el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw))),
-panel('key',t('s_security'),el('div',{class:'form'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),btn(t('s_change'),'floppy-disk',savePw,'pri'))),
-panel('globe',t('dm_title'),el('div',{class:'form'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
+panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),btn(t('s_change'),'floppy-disk',savePw,'pri'))),
+panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
-panel('gauge-high',t('lim_title'),el('div',{class:'form'},
+panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
 field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
@@ -579,7 +586,7 @@ el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_res
 panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}))),
 panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),bn,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn(bn.value),'pri'),btn(t('bn_clear'),'eraser',()=>saveBn(''))))),
 panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
-panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs'},
+panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},
 kv(t('sys_version'),VERSION),
 latestRow(),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
