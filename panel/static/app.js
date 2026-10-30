@@ -37,17 +37,17 @@ function dd(opts,val,on,mw=170,ph){
 const lab=el('span',{class:'dd-l'});
 const b=el('button',{type:'button',class:'dd-b'},lab,ic('chevron-down','dd-c'));
 const wrap=el('div',{class:'dd'},b);
-let pop=null;
+let pop=null,t0=0;
 const dot=c=>{const d=el('span',{class:'sdot'});d.style.background=c;return d};
 const set=v=>{val=v;const o=opts.find(o=>o.v===v);if(!o&&ph){lab.replaceChildren(ph);return}const x=o||opts[0];lab.replaceChildren(...(x.c?[dot(x.c)]:[]),x.l)};
 function close(){if(!pop)return;const p=pop;pop=null;p.classList.add('out');setTimeout(()=>p.remove(),140);wrap.classList.remove('open');document.removeEventListener('mousedown',out,true);document.removeEventListener('keydown',key,true);document.removeEventListener('scroll',sc,true);window.removeEventListener('resize',close)}
 function out(e){if(pop&&!pop.contains(e.target)&&!b.contains(e.target))close()}
 function key(e){if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close()}}
-function sc(e){if(pop&&!pop.contains(e.target))close()}
+function sc(e){if(pop&&!pop.contains(e.target)&&Date.now()-t0>150)close()}
 b.addEventListener('click',()=>{
 if(pop){close();return}
-pop=el('div',{class:'dd-p'},...opts.map(o=>el('button',{type:'button',class:'dd-o'+(o.v===val?' on':''),onclick:()=>{set(o.v);on(o.v);close()}},o.c?dot(o.c):o.i?ic(o.i):null,el('span',{},o.l),o.v===val?ic('check','dd-k'):null)));
-wrap.append(pop);wrap.classList.add('open');
+pop=el('div',{class:'dd-p',popover:'manual'},...opts.map(o=>el('button',{type:'button',class:'dd-o'+(o.v===val?' on':''),onclick:()=>{set(o.v);on(o.v);close()}},o.c?dot(o.c):o.i?ic(o.i):null,el('span',{},o.l),o.v===val?ic('check','dd-k'):null)));
+t0=Date.now();wrap.append(pop);try{pop.showPopover()}catch(e){}wrap.classList.add('open');
 const r=b.getBoundingClientRect();
 pop.style.minWidth=Math.max(r.width,mw)+'px';
 const w=pop.offsetWidth,h=pop.offsetHeight;
@@ -255,14 +255,14 @@ const act=A.filter(a=>a.status==='active').length;
 const up=A.reduce((x,a)=>x+a.up,0),dn=A.reduce((x,a)=>x+a.down,0);
 const rx=H.rx.length?H.rx[H.rx.length-1]:0,tx=H.tx.length?H.tx[H.tx.length-1]:0;
 const ramP=s.mem_total?s.mem_used/s.mem_total*100:0,diskP=s.disk_total?s.disk_used/s.disk_total*100:0;
-const row1=el('div',{class:'grid g4'},
+const row1=el('div',{class:'grid'},
 tile('microchip','c1',t('d_cpu'),s.cpu.toFixed(1)+'%',t('d_cores',s.cores)+' · '+t('d_load')+' '+s.load[0].toFixed(2),[spark(H.cpu,'s1',100),coresGrid(s)]),
 tile('memory','c2',t('d_ram'),ramP.toFixed(1)+'%',bytes(s.mem_used)+' / '+bytes(s.mem_total),spark(H.ram,'s2',100)),
 tile('hard-drive','c3',t('d_disk'),diskP.toFixed(1)+'%',bytes(s.disk_used)+' / '+bytes(s.disk_total),meter(diskP,diskP>90?'bad':'')),
 tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+bytes(rx)+'/s'),'↑ '+bytes(tx)+'/s',spark(H.rx,'s4')),
 portsTile(s.ports||[]));
 const trf=trafficTile(s);
-const row2=el('div',{class:'grid g4'},
+const row2=el('div',{class:'grid'},
 tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)+' · '+t('d_conn_n',A.reduce((x,a)=>x+(a.conn||0),0))),
 tile('chart-line','c7',t('d_traffic'),bytes(up+dn),'↑ '+bytes(up)+' · ↓ '+bytes(dn)),
 tile('clock','c8',t('d_uptime'),upt(s.uptime),t('d_load')+' '+s.load.map(x=>x.toFixed(2)).join(' / ')));
@@ -274,7 +274,7 @@ const now=Date.now()/1000;
 const exp=A.filter(a=>a.expires&&a.expires>now&&a.expires-now<7*86400).sort((a,b)=>a.expires-b.expires).slice(0,6);
 const expL=el('div',{class:'list'},...(exp.length?exp.map(a=>el('div',{class:'li li-r'},badge(pk(a)),el('b',{},a.name),el('span',{class:'muted'},left(a.expires)))):[el('div',{class:'empty'},t('d_none'))]));
 const sv=el('div',{},el('div',{class:'svc'},...Object.entries(s.services).map(([k,v])=>{const z=typeof v==='string'?v:(v?'ok':'warn');return el('span',{class:'pill '+z,title:t('svc_'+z)},ic(SIC[z]),k)})),el('div',{class:'muted sm svc-lg'},t('svc_legend')));
-const rest=[row2,el('div',{class:'grid g2'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid g2'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv))];
+const rest=[row2,el('div',{class:'grid'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv))];
 const v=$('#view');
 if(trf.parentNode===v){while(v.firstChild!==trf)v.firstChild.remove();while(trf.nextSibling)trf.nextSibling.remove();v.insertBefore(row1,trf);v.append(...rest)}
 else v.replaceChildren(row1,trf,...rest)
@@ -451,7 +451,7 @@ const BL=[
 {c:'sshssl',i:'lock',n:'SSH SSL',d:'cb_ssl_desc',rows:[['sshssl','tls'],['sshssl','plain']]},
 {c:'udpcustom',i:'tower-broadcast',n:'UDP Custom',d:'cb_udp_desc',rows:[['sshudp','udp']]},
 {c:'xray',i:'bolt',n:'Xray',d:'cb_xray_desc',rows:V2R}];
-const box=el('div',{class:'kvs cols lg'},el('div',{class:'empty'},ic('spinner','fa-spin')));
+const box=el('div',{class:'kvs cols xl'},el('div',{class:'empty'},ic('spinner','fa-spin')));
 let R=null;
 const fill=async()=>{
 try{R=await api('GET','/api/components');box.replaceChildren(el('div',{class:'muted sm'},t('cb_desc')),...BL.map(draw),el('div',{class:'muted sm'},t('svc_legend')))}catch(e){terr(e)}
@@ -487,8 +487,9 @@ if(cm.info&&cm.info.url)info.push(el('div',{class:'muted sm brk'},t('udp_src')+'
 if(cm.info&&cm.info.sha256)info.push(el('div',{class:'muted sm brk'},t('udp_sha')+': ',el('span',{class:'ltr'},cm.info.sha256)))}
 }
 return el('div',{class:'cbk'},
-el('div',{class:'srow cbh'},el('span',{class:'ico c1'},ic(b.i)),el('div',{class:'srow-t'},el('b',{},b.n),el('div',{class:'muted sm'},t(b.d))),el('div',{class:'row nw'},el('span',{class:'pill '+cm.state,title:t('svc_'+cm.state)},ic(SIC[cm.state]),t('svc_'+cm.state)),act)),
-...info,...rows)
+el('div',{class:'cbh'},el('span',{class:'ico c1'},ic(b.i)),el('div',{class:'cbt'},el('b',{},b.n),el('span',{class:'pill '+cm.state,title:t('svc_'+cm.state)},ic(SIC[cm.state]),t('svc_'+cm.state))),act),
+el('div',{class:'muted sm cbd'},t(b.d)),
+...info,el('div',{class:'cbrows'},...rows))
 }
 fill();
 return box
@@ -505,7 +506,7 @@ try{await api('POST','/api/password',{old:o.value,new:n.value});toast(t('s_chang
 };
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
-const res=el('div',{class:'kvs'});
+const res=el('div',{class:'kvs cols full box'});
 const showDom=r=>res.replaceChildren(...[
 kv(t('dm_current'),r.domain||t('dm_none')),
 kv(t('dm_server_ip'),r.server_ip||'—'),
@@ -527,7 +528,7 @@ const saveLim=async()=>{
 try{await api('POST','/api/settings',{cap_gb:cap.value,cap_basis:bv,used_gb:usedIn.value});toast(t('lim_saved'));usedIn.value='';if(S)await loadStats()}catch(e){terr(e)}
 };
 const resetMonth=()=>ask(t('lim_reset_confirm'),t('lim_reset'),async()=>{try{await api('POST','/api/settings',{reset:true});toast(t('lim_saved'));if(S)await loadStats()}catch(e){terr(e);return false}});
-const themeBox=el('div',{class:'form'});
+const themeBox=el('div',{class:'dc'});
 const drawTheme=()=>{const cur=document.documentElement.dataset.theme;
 themeBox.replaceChildren(
 field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],cur,v=>{setTheme(v);drawTheme()})),
@@ -569,13 +570,12 @@ el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.
 };
 fillLogs();
 $('#view').replaceChildren(el('div',{class:'stack'},
-panel('palette',t('s_appearance'),el('div',{class:'form cols'},
+panel('palette',t('s_appearance'),el('div',{class:'form cols lg'},
 themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
-field(t('s_tz'),tzBox,t('s_tz_hint')),
-el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw))),
-panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),btn(t('s_change'),'floppy-disk',savePw,'pri'))),
+el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))))),
+panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')))),
 panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
