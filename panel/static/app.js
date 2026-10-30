@@ -4,10 +4,11 @@ const csrf=$('meta[name=csrf]').content;
 const VERSION=$('meta[name=version]').content;
 const NS='http://www.w3.org/2000/svg';
 const GB=1073741824;
-const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},sshudp:{i:'tower-broadcast',n:'UDP Custom'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
 const THEMES=[['blue','#6366f1','#06b6d4'],['red','#dc2626','#fb7185'],['green','#16a34a','#2dd4bf'],['purple','#8b5cf6','#e879f9'],['cyan','#0891b2','#22d3ee'],['orange','#ea580c','#fbbf24'],['pink','#db2777','#f472b6'],['gold','#d97706','#fde047']];
 const setTheme=v=>{try{localStorage.setItem('theme',v)}catch(e){}document.documentElement.dataset.theme=v};
-const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':'sshws'):a.proto;
+const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':a.transport==='udp'?'sshudp':'sshws'):a.proto;
+const SIC={ok:'circle-check',off:'circle-minus',bad:'circle-xmark',warn:'triangle-exclamation'};
 const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
@@ -25,7 +26,7 @@ const sti=a=>el('span',{class:'sti '+SC[a.status],title:t('st_'+a.status)},ic(SI
 const copy=async v=>{try{await navigator.clipboard.writeText(v);toast(t('copied'))}catch{toast(t('copy_fail'))}};
 const modal=(title,body,btns=[],cls='')=>{const d=el('dialog',{class:cls},el('div',{class:'dlg-h'},el('h3',{},title),el('button',{class:'icon-btn',title:t('close'),onclick:()=>d.close()},ic('xmark'))),el('div',{class:'dlg-b'},body),btns.length?el('div',{class:'dlg-f'},...btns):null);d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();return d};
 const btn=(label,icon,f,c='')=>el('button',{class:'btn '+c,type:'button',onclick:f},icon?ic(icon):null,label?el('span',{},label):null);
-const seg=(opts,val,on)=>{const box=el('div',{class:'seg'});const draw=()=>box.replaceChildren(...opts.map(o=>el('button',{type:'button',class:o.v===val?'on':'',onclick:()=>{val=o.v;on(val);draw()}},o.i?ic(o.i):null,el('span',{},o.l))));draw();return box};
+const seg=(opts,val,on)=>{const box=el('div',{class:'seg'});const draw=()=>box.replaceChildren(...opts.map(o=>el('button',{type:'button',class:o.v===val?'on':'',disabled:!!o.dis,onclick:()=>{val=o.v;on(val);draw()}},o.i?ic(o.i):null,el('span',{},o.l))));draw();box.upd=(o2,v2)=>{opts=o2;val=v2;draw()};return box};
 function dd(opts,val,on,mw=170,ph){
 const lab=el('span',{class:'dd-l'});
 const b=el('button',{type:'button',class:'dd-b'},lab,ic('chevron-down','dd-c'));
@@ -266,7 +267,7 @@ const topL=el('div',{class:'list'},...(top.length?top.map(a=>el('div',{class:'li
 const now=Date.now()/1000;
 const exp=A.filter(a=>a.expires&&a.expires>now&&a.expires-now<7*86400).sort((a,b)=>a.expires-b.expires).slice(0,6);
 const expL=el('div',{class:'list'},...(exp.length?exp.map(a=>el('div',{class:'li li-r'},badge(pk(a)),el('b',{},a.name),el('span',{class:'muted'},left(a.expires)))):[el('div',{class:'empty'},t('d_none'))]));
-const sv=el('div',{class:'svc'},...Object.entries(s.services).map(([k,v])=>el('span',{class:'pill '+(v?'ok':'bad')},ic(v?'circle-check':'circle-xmark'),k)));
+const sv=el('div',{},el('div',{class:'svc'},...Object.entries(s.services).map(([k,v])=>{const z=typeof v==='string'?v:(v?'ok':'warn');return el('span',{class:'pill '+z,title:t('svc_'+z)},ic(SIC[z]),k)})),el('div',{class:'muted sm svc-lg'},t('svc_legend')));
 const rest=[row2,el('div',{class:'grid g2'},panel('diagram-project',t('d_by_proto'),byp),panel('ranking-star',t('d_top'),topL)),el('div',{class:'grid g2'},panel('hourglass-half',t('d_expiring'),expL),panel('server',t('d_services'),sv))];
 const v=$('#view');
 if(trf.parentNode===v){while(v.firstChild!==trf)v.firstChild.remove();while(trf.nextSibling)trf.nextSibling.remove();v.insertBefore(row1,trf);v.append(...rest)}
@@ -279,7 +280,7 @@ return tile('plug','c6',t('pt_title'),on+' / '+tot,t('pt_sub'),el('div',{class:'
 function accRow(a){
 const used=a.up+a.down;
 const act=a.status==='active';
-const tlsTag=a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
+const tlsTag=a.transport==='udp'?'UDP':a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
 return el('tr',{},
 el('td',{},el('b',{},sti(a),a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
@@ -356,11 +357,28 @@ const connHint=el('small',{class:'muted'});
 const note=el('input',{maxlength:100,value:ed?a.note:''});
 const genName=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{name.value='u'+rnd(6).toLowerCase()}},ic('dice'));
 const genSec=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{secret.value=(st.kind==='v2'&&st.proto!=='trojan')?crypto.randomUUID():rnd(14)}},ic('dice'));
-const kindSeg=seg([{v:'ssh',l:'SSH',i:'terminal'},{v:'v2',l:'V2Ray',i:'bolt'}],st.kind,v=>{st.kind=v;sync()});
-const protoSeg=seg([{v:'vless',l:'VLESS',i:'bolt'},{v:'vmess',l:'VMess',i:'diagram-project'},{v:'trojan',l:'Trojan',i:'shield-halved'}],st.proto,v=>{st.proto=v;sync()});
-const tlsSeg=seg([{v:'tls',l:t('tls_tls'),i:'lock'},{v:'plain',l:t('tls_plain'),i:'lock-open'},{v:'both',l:t('tls_both'),i:'layer-group'}],st.tls,v=>{st.tls=v});
-const transportSeg=seg([{v:'ws',l:t('tr_ws'),i:'globe'},{v:'ssl',l:t('tr_ssl'),i:'lock'}],st.transport,v=>{st.transport=v;sync()});
+let CB=null;
+try{const r=await api('GET','/api/components');CB={};r.combos.forEach(x=>{CB[x.k]=x})}catch(e){}
+const av=k=>!CB||!!(CB[k]&&CB[k].avail);
+const V2P=['vless','vmess','trojan'];
+const baseOf=(kind,proto,tr)=>kind==='v2'?proto:(tr==='ssl'?'sshssl':tr==='udp'?'sshudp':'sshws');
+const orgBase=ed?baseOf(a.proto==='ssh'?'ssh':'v2',a.proto,a.transport):'';
+const isUdp=()=>st.kind==='ssh'&&st.transport==='udp';
+const kindOk=k=>ed||(k==='ssh'?['sshws:tls','sshws:plain','sshssl:tls','sshssl:plain','sshudp:udp']:V2P.flatMap(p=>[p+':tls',p+':plain'])).some(av);
+const protoOk=p=>(ed&&a.proto===p)||av(p+':tls')||av(p+':plain');
+const trOk=x=>{if(ed&&a.proto==='ssh'&&a.transport===x)return true;if(x==='udp')return av('sshudp:udp');const b=x==='ssl'?'sshssl':'sshws';return av(b+':tls')||av(b+':plain')};
+const tlsOk=m=>{const b=baseOf(st.kind,st.proto,st.transport);if(ed&&b===orgBase&&a.tls===m)return true;return m==='both'?av(b+':tls')&&av(b+':plain'):av(b+':'+m)};
+const kindOpts=()=>[{v:'ssh',l:'SSH',i:'terminal',dis:!kindOk('ssh')},{v:'v2',l:'V2Ray',i:'bolt',dis:!kindOk('v2')}];
+const protoOpts=()=>[{v:'vless',l:'VLESS',i:'bolt'},{v:'vmess',l:'VMess',i:'diagram-project'},{v:'trojan',l:'Trojan',i:'shield-halved'}].map(o=>({...o,dis:!protoOk(o.v)}));
+const trOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'ssl',l:t('tr_ssl'),i:'lock'},{v:'udp',l:t('tr_udp'),i:'tower-broadcast'}].map(o=>({...o,dis:!trOk(o.v)}));
+const tlsOpts=()=>[{v:'tls',l:t('tls_tls'),i:'lock'},{v:'plain',l:t('tls_plain'),i:'lock-open'},{v:'both',l:t('tls_both'),i:'layer-group'}].map(o=>({...o,dis:!tlsOk(o.v)}));
+const selKeys=()=>{if(st.kind==='v2'||!isUdp()){const b=baseOf(st.kind,st.proto,st.transport);return(st.tls==='both'?['tls','plain']:[st.tls]).map(m=>b+':'+m)}return['sshudp:udp']};
+const kindSeg=seg(kindOpts(),st.kind,v=>{st.kind=v;sync()});
+const protoSeg=seg(protoOpts(),st.proto,v=>{st.proto=v;sync()});
+const tlsSeg=seg(tlsOpts(),st.tls,v=>{st.tls=v});
+const transportSeg=seg(trOpts(),st.transport,v=>{st.transport=v;sync()});
 const tlsHint=el('div',{class:'hint'},ic('triangle-exclamation'),t('tls_unavailable'));
+const unav=el('div',{class:'hint'},ic('circle-info'),t('f_unavail_hint'));
 const secLabel=el('span',{});
 const boxProto=field(t('f_proto'),protoSeg);
 const tlsHintTxt=el('small',{class:'muted'},t('f_tls_hint'));
@@ -369,14 +387,23 @@ const boxTransport=field(t('f_transport'),transportSeg,t('f_transport_hint'));
 const boxKind=field(t('f_type'),kindSeg);
 const boxConn=el('div',{class:'f'},el('span',{},t('f_conn_limit')),connLim,chips([1,2,3,5,0],connLim),connHint);
 function sync(){
-const v2=st.kind==='v2';
-boxProto.hidden=!v2||ed;boxTransport.hidden=v2;boxTls.hidden=forced;tlsHint.hidden=!forced;
+if(!ed){
+if(!kindOk(st.kind))st.kind=kindOk('ssh')?'ssh':'v2';
+if(st.kind==='v2'&&!protoOk(st.proto))st.proto=V2P.find(protoOk)||st.proto;
+if(st.kind==='ssh'&&!trOk(st.transport))st.transport=['ws','ssl','udp'].find(trOk)||st.transport;
+if(isUdp())st.tls='plain';
+else if(!forced&&!tlsOk(st.tls))st.tls=['both','plain','tls'].find(tlsOk)||st.tls
+}
+const v2=st.kind==='v2',udp=isUdp();
+kindSeg.upd(kindOpts(),st.kind);protoSeg.upd(protoOpts(),st.proto);transportSeg.upd(trOpts(),st.transport);tlsSeg.upd(tlsOpts(),st.tls);
+boxProto.hidden=!v2||ed;boxTransport.hidden=v2;boxTls.hidden=forced||udp;tlsHint.hidden=!forced||udp;
+unav.hidden=!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!boxTls.hidden&&tlsOpts().some(o=>o.dis))));
 tlsHintTxt.textContent=t(!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
 boxConn.hidden=v2;connHint.textContent=t('f_conn_limit_ssh');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
-ed?null:boxKind,boxProto,boxTransport,boxTls,tlsHint,
+ed?null:boxKind,boxProto,boxTransport,boxTls,tlsHint,unav,
 field(t('f_name'),el('div',{class:'inp-row'},name,ed?null:genName)),
 el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],expF),el('small',{class:'muted'},t('f_exp_hint'))),
@@ -388,6 +415,7 @@ const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
 btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
 const x=expF.get();
 if(!x.ok){toast(t('e_bad_date'));return}
+if(!ed&&CB&&!selKeys().every(av)){toast(t('e_combo_disabled'));return}
 const b={secret:secret.value,quota_gb:quota.value,conn_limit:st.kind==='v2'?0:connLim.value,note:note.value,tls:st.tls,transport:st.transport};
 if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(U(x.d)/1000):0;
 try{
@@ -407,6 +435,56 @@ const pre=el('pre',{class:'log big'},'...');
 const load=async()=>{try{const r=await api('GET','/api/logs/'+k+'?n=500');pre.textContent=r.text||t('lg_empty');pre.scrollTop=pre.scrollHeight}catch(e){terr(e)}};
 const d=modal(t('lg_'+k),pre,[btn(t('lg_refresh'),'rotate',load),btn(t('lg_download'),'download',()=>dlLog(k)),btn(t('lg_clear'),'eraser',()=>clearLog(k,async()=>{await load();if(after)await after()}),'dgr')],'wide');
 await load()
+}
+function compsBox(){
+const ML={tls:t('cb_tls'),plain:t('cb_plain'),udp:t('cb_udp')};
+const V2R=['vless','vmess','trojan'].flatMap(p=>['tls','plain'].map(m=>[p,m]));
+const BL=[
+{c:'wsbridge',i:'terminal',n:'SSH WebSocket',d:'cb_ws_desc',rows:[['sshws','tls'],['sshws','plain']]},
+{c:'sshssl',i:'lock',n:'SSH SSL',d:'cb_ssl_desc',rows:[['sshssl','tls'],['sshssl','plain']]},
+{c:'udpcustom',i:'tower-broadcast',n:'UDP Custom',d:'cb_udp_desc',rows:[['sshudp','udp']]},
+{c:'xray',i:'bolt',n:'Xray',d:'cb_xray_desc',rows:V2R}];
+const box=el('div',{class:'kvs'},el('div',{class:'empty'},ic('spinner','fa-spin')));
+let R=null;
+const fill=async()=>{
+try{R=await api('GET','/api/components');box.replaceChildren(el('div',{class:'muted sm'},t('cb_desc')),...BL.map(draw),el('div',{class:'muted sm'},t('svc_legend')))}catch(e){terr(e)}
+};
+const doInstall=b=>{
+if(b.c==='udpcustom'){
+const cb=el('input',{type:'checkbox'});
+const ex=el('div',{class:'udpw'},el('ul',{},...['udp_warn_1','udp_warn_2','udp_warn_3','udp_warn_4'].map(k=>el('li',{},t(k)))),el('label',{class:'chk'},cb,el('span',{},t('udp_ack'))));
+ask(t('udp_warn_lead'),t('cb_install'),()=>{if(!cb.checked){toast(t('udp_ack_needed'));return false}return runJob('/api/components/udpcustom/install',{ack:true},t('cb_w_install'))},{title:t('udp_warn_title'),extra:ex})
+}else ask(t('cb_install_confirm',b.n),t('cb_install'),()=>runJob('/api/components/'+b.c+'/install',{},t('cb_w_install')),{danger:false})
+};
+const doRemove=(b,cm)=>ask(t('cb_uninstall_confirm',b.n,t('cb_accounts',cm.accounts)),t('cb_uninstall'),()=>runJob('/api/components/'+b.c+'/uninstall',{},t('cb_w_uninstall')));
+function draw(b){
+const cm=R.comps[b.c],CBm=Object.fromEntries(R.combos.map(x=>[x.k,x])),busy=R.busy;
+const enabledN=b.rows.filter(([p,m])=>CBm[p+':'+m].enabled).length;
+const act=cm.removable?(cm.installed?btn('','trash',()=>doRemove(b,cm),'dgr'):btn(t('cb_install'),'download',()=>doInstall(b),'pri')):null;
+if(act&&busy)act.disabled=true;
+const rows=b.rows.map(([p,m])=>{
+const x=CBm[p+':'+m];
+const s=sw(x.enabled,v=>{
+const send=async()=>{try{await api('POST','/api/components/combo',{key:x.k,enabled:v});toast(t('done'))}catch(e){terr(e)}await fill()};
+if(!v&&enabledN===1&&cm.removable&&cm.installed&&cm.accounts>0){const d=ask(t('cb_off_confirm',b.n,t('cb_accounts',cm.accounts)),t('confirm'),async()=>{await send()});d.addEventListener('close',fill)}
+else send()
+});
+if(!cm.installed||busy)s.disabled=true;
+return el('div',{class:'cbrow'},el('div',{class:'srow-t'},el('b',{},(b.c==='xray'?PM[p].n+' · ':'')+ML[m]),x.why==='no_tls'?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('cb_no_tls')):null),s)
+});
+const info=[];
+if(b.c==='udpcustom'){
+if(!cm.installed)info.push(el('div',{class:'hint'},ic('triangle-exclamation'),t('udp_warn_1')));
+else{info.push(el('div',{class:'muted sm'},t('udp_portl')+': ',el('b',{class:'ltr'},cm.port)));
+if(cm.info&&cm.info.url)info.push(el('div',{class:'muted sm brk'},t('udp_src')+': ',el('span',{class:'ltr'},cm.info.url)));
+if(cm.info&&cm.info.sha256)info.push(el('div',{class:'muted sm brk'},t('udp_sha')+': ',el('span',{class:'ltr'},cm.info.sha256)))}
+}
+return el('div',{class:'cbk'},
+el('div',{class:'srow cbh'},el('span',{class:'ico c1'},ic(b.i)),el('div',{class:'srow-t'},el('b',{},b.n),el('div',{class:'muted sm'},t(b.d))),el('div',{class:'row nw'},el('span',{class:'pill '+cm.state,title:t('svc_'+cm.state)},ic(SIC[cm.state]),t('svc_'+cm.state)),act)),
+...info,...rows)
+}
+fill();
+return box
 }
 async function viewSettings(){
 const s=await api('GET','/api/settings');
@@ -492,6 +570,7 @@ field(t('s_tz'),tzBox,t('s_tz_hint')),
 el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw))),
 panel('key',t('s_security'),el('div',{class:'form'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),btn(t('s_change'),'floppy-disk',savePw,'pri'))),
 panel('globe',t('dm_title'),el('div',{class:'form'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
+panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
 field(t('lim_basis'),basisDd),
