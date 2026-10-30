@@ -17,7 +17,7 @@ LOGF="/var/log/isile-install.log"
 BANNER_TXT="/etc/vpnpanel/banner.txt"
 BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
 BANNER_MAX=2000
-LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log")}
+LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"])}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -27,7 +27,16 @@ GB=1073741824
 V2=("vless","vmess","trojan")
 PROTOS=("ssh",)+V2
 MODES=("tls","plain")
-TRANSPORTS=("ws","ssl")
+TRANSPORTS=("ws","ssl","udp")
+UNITDIR="/etc/systemd/system"
+UDPC_DIR="/usr/local/lib/isile/udp-custom"
+UDPC_BIN=UDPC_DIR+"/udp-custom"
+UDPC_CONF=UDPC_DIR+"/config.json"
+UDPC_INFO="/etc/vpnpanel/udp-custom.info"
+UDPC_PORT=36712
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"))
+COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray"}
+REMOVABLE=("wsbridge","udpcustom","xray")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
@@ -185,6 +194,99 @@ def harvest_nft():
         if m:
             out.setdefault(int(m.group(2)),[0,0])[0 if m.group(1)=="u" else 1]+=int(k.get("bytes",0))
     return out
+def unit_exists(n):
+    return os.path.exists("%s/%s.service"%(UNITDIR,n))
+def comp_installed(c):
+    if c=="xray":
+        return unit_exists("xray") and os.path.exists(XBIN)
+    if c=="udpcustom":
+        return unit_exists("udp-custom") and os.path.exists(UDPC_BIN)
+    if c=="wsbridge":
+        return unit_exists("vpnbridge")
+    return True
+def combos_off():
+    return {x for x in get("combos_off","").split(",") if x}
+def comp_combos(c):
+    return [p+":"+m for p,m,k in COMBOS if k==c]
+def comp_enabled(c,off=None):
+    off=combos_off() if off is None else off
+    return any(k not in off for k in comp_combos(c))
+def comp_on(c):
+    return comp_installed(c) and comp_enabled(c)
+def svc_active(u):
+    return sh(["systemctl","is-active","--quiet",u]).returncode==0
+def block_state(c,off=None):
+    if not comp_installed(c):
+        return "bad"
+    if not comp_enabled(c,off):
+        return "off"
+    return "ok" if svc_active(COMP_UNIT[c]) else "warn"
+def udp_port():
+    try:
+        with open(UDPC_CONF) as f:
+            m=re.search(r":(\d{1,5})$",str(json.load(f).get("listen","")))
+        if m and 0<int(m.group(1))<65536:
+            return int(m.group(1))
+    except (OSError,ValueError,AttributeError):
+        pass
+    return UDPC_PORT
+def udpc_info():
+    o={}
+    try:
+        with open(UDPC_INFO) as f:
+            for l in f:
+                k,_,v=l.partition("=")
+                if k in ("url","sha256"):
+                    o[k]=v.strip()
+    except OSError:
+        return None
+    return o or None
+def combo_info(off=None):
+    off=combos_off() if off is None else off
+    t=tls_on()
+    inst={c:comp_installed(c) for c in COMP_UNIT}
+    out=[]
+    for p,m,c in COMBOS:
+        k=p+":"+m
+        why=""
+        if not inst[c]:
+            why="not_installed"
+        elif k in off:
+            why="disabled"
+        elif m=="tls" and not t:
+            why="no_tls"
+        out.append({"k":k,"p":p,"m":m,"c":c,"enabled":k not in off,"installed":inst[c],"avail":not why,"why":why})
+    return out
+def acct_keys(proto,transport,tls):
+    if proto=="ssh":
+        if transport=="udp":
+            return ["sshudp:udp"]
+        base="sshws" if transport=="ws" else "sshssl"
+    else:
+        base=proto
+    return [base+":"+m for m in (MODES if tls=="both" else (tls,))]
+def keys_denied(keys):
+    off=combos_off()
+    cm={p+":"+m:c for p,m,c in COMBOS}
+    for k in keys:
+        c=cm.get(k)
+        if not c or not comp_installed(c) or k in off:
+            return k
+    return ""
+def expected_units():
+    u=["vpnpanel","nginx","vpnmux"]
+    if comp_on("wsbridge"):
+        u.append("vpnbridge")
+    if comp_on("xray"):
+        u.append("xray")
+    if comp_on("udpcustom"):
+        u.append("udp-custom")
+    try:
+        if os.path.getsize("/etc/vpnpanel/stunnel.conf")>0:
+            u.append("vpnstunnel")
+    except OSError:
+        pass
+    return u
 def xray_running():
     return sh(["systemctl","is-active","--quiet","xray"]).returncode==0
 def harvest_xray():
@@ -323,6 +425,8 @@ def cfg_struct(cfg):
             ib["settings"]["clients"]=[]
     return o
 def restart_xray(c):
+    if not comp_on("xray"):
+        return
     if xray_running():
         collect(c)
     sh(["systemctl","restart","xray"])
@@ -350,6 +454,8 @@ def hot(rm,add):
 def xray_sync(c):
     global RUN
     with LOCK:
+        if not comp_on("xray"):
+            return
         cfg=xray_conf(c)
         old=read_cfg()
         run=xray_running()
@@ -389,6 +495,26 @@ def reconcile(c):
                 ssh_lock(r["name"],new!="active")
         c.commit()
         xray_sync(c)
+def apply_components(c):
+    with LOCK:
+        off=combos_off()
+        for comp in ("wsbridge","udpcustom"):
+            if not comp_installed(comp):
+                continue
+            u=COMP_UNIT[comp]
+            if comp_enabled(comp,off):
+                if not svc_active(u):
+                    sh(["systemctl","enable","--now",u])
+            else:
+                sh(["systemctl","disable","--now",u])
+        if comp_installed("xray"):
+            if comp_enabled("xray",off):
+                sh(["systemctl","enable","xray"])
+                xray_sync(c)
+            else:
+                if xray_running():
+                    collect(c)
+                sh(["systemctl","disable","--now","xray"])
 DAYS={"last":""}
 def pnow():
     try:
@@ -696,11 +822,29 @@ def listening_ports():
         except OSError:
             pass
     return out
+def listening_udp():
+    out=set()
+    for f in ("/proc/net/udp","/proc/net/udp6"):
+        try:
+            with open(f) as fh:
+                for l in list(fh)[1:]:
+                    p=l.split()
+                    if len(p)<4 or p[3]!="07":
+                        continue
+                    a,_,pt=p[1].rpartition(":")
+                    if a in ("0100007F","00000000000000000000000001000000"):
+                        continue
+                    out.add(int(pt,16))
+        except OSError:
+            pass
+    return out
 def ports_info():
     ls=listening_ports()
     t=tls_on()
-    rows=[("ssh",ssh_port(),True),("http",80,True),("https",443,t),("panel",2080,True)]
-    return [{"k":k,"port":p,"enabled":en,"listening":en and p in ls} for k,p,en in rows]
+    rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",2080,True,ls)]
+    if comp_installed("udpcustom"):
+        rows.append(("udp",udp_port(),comp_on("udpcustom"),listening_udp()))
+    return [{"k":k,"port":p,"enabled":en,"listening":en and p in l} for k,p,en,l in rows]
 @app.get("/api/stats")
 @auth
 def stats():
@@ -710,11 +854,14 @@ def stats():
             k,v=l.split(":",1)
             mem[k]=int(v.split()[0])*1024
     du=shutil.disk_usage("/")
-    sv={s:sh(["systemctl","is-active","--quiet",s]).returncode==0 for s in ("xray","nginx","vpnbridge","vpnmux")}
+    off=combos_off()
+    run=lambda u:"ok" if svc_active(u) else "warn"
+    sv={"xray":block_state("xray",off),"nginx":run("nginx"),"vpnbridge":block_state("wsbridge",off),"vpnmux":run("vpnmux")}
     if tls_on():
-        sv["vpnstunnel"]=sh(["systemctl","is-active","--quiet","vpnstunnel"]).returncode==0
-    sv["ssh"]=any(sh(["systemctl","is-active","--quiet",s]).returncode==0 for s in ("ssh","ssh.socket"))
-    sv["panel"]=True
+        sv["vpnstunnel"]=run("vpnstunnel")
+    sv["ssh"]="ok" if any(svc_active(s) for s in ("ssh","ssh.socket")) else "warn"
+    sv["panel"]="ok"
+    sv["udp-custom"]=block_state("udpcustom",off)
     with open("/proc/uptime") as f:
         up=float(f.read().split()[0])
     rx,tx=net_totals()
@@ -847,7 +994,13 @@ def log_sources():
                 out.append({"id":k,"kind":"file","size":os.path.getsize(src)})
             except OSError:
                 pass
-        elif k!="stunnel" or (os.path.exists("/etc/vpnpanel/stunnel.conf") and os.path.getsize("/etc/vpnpanel/stunnel.conf")>0):
+        elif k=="stunnel":
+            if os.path.exists("/etc/vpnpanel/stunnel.conf") and os.path.getsize("/etc/vpnpanel/stunnel.conf")>0:
+                out.append({"id":k,"kind":"unit"})
+        elif k=="udpcustom":
+            if comp_installed("udpcustom"):
+                out.append({"id":k,"kind":"unit"})
+        else:
             out.append({"id":k,"kind":"unit"})
     return out
 def log_text(k,n,full=False):
@@ -967,7 +1120,8 @@ def latest_version():
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
-    e=start_job("restart","sleep 1; systemctl restart xray vpnbridge nginx vpnmux; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel")
+    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom")) if comp_on(c)]+["nginx","vpnmux"]
+    e=start_job("restart","sleep 1; systemctl restart %s; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel"%" ".join(us))
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
@@ -1045,6 +1199,77 @@ def sys_job():
         os.unlink(JOBF)
         return jsonify(state="none")
     return jsonify(state="running",kind=j.get("kind"))
+def job_busy():
+    if not os.path.exists(JOBF) or os.path.exists(RCF):
+        return False
+    try:
+        with open(JOBF) as f:
+            return time.time()-json.load(f).get("started",0)<900
+    except (OSError,ValueError):
+        return False
+def comp_accounts(c,comp):
+    q={"xray":"proto IN ('vless','vmess','trojan')","wsbridge":"proto='ssh' AND transport='ws'","udpcustom":"proto='ssh' AND transport='udp'"}.get(comp)
+    if not q:
+        return 0
+    return c.execute("SELECT COUNT(*) n FROM accounts WHERE "+q).fetchone()["n"]
+@app.get("/api/components")
+@auth
+def comps_get():
+    off=combos_off()
+    c=db()
+    try:
+        comps={}
+        for k in COMP_UNIT:
+            o={"installed":comp_installed(k),"removable":k in REMOVABLE,"state":block_state(k,off),"accounts":comp_accounts(c,k)}
+            if k=="udpcustom":
+                o["port"]=udp_port()
+                o["info"]=udpc_info()
+            comps[k]=o
+    finally:
+        c.close()
+    return jsonify(combos=combo_info(off),comps=comps,tls_on=tls_on(),busy=job_busy())
+@app.post("/api/components/combo")
+@auth
+def combo_set():
+    d=request.get_json(silent=True) or {}
+    k=str(d.get("key",""))
+    if k not in {p+":"+m for p,m,c in COMBOS}:
+        return err("bad_values")
+    with LOCK:
+        off=combos_off()
+        if d.get("enabled"):
+            off.discard(k)
+        else:
+            off.add(k)
+        put("combos_off",",".join(sorted(off)))
+        c=db()
+        try:
+            apply_components(c)
+        finally:
+            c.close()
+    return jsonify(ok=True)
+@app.post("/api/components/<comp>/<action>")
+@auth
+def comp_action(comp,action):
+    if comp not in REMOVABLE or action not in ("install","uninstall"):
+        return err("not_found",404)
+    d=request.get_json(silent=True) or {}
+    if comp=="udpcustom" and action=="install" and not d.get("ack"):
+        return err("ack_required")
+    if action=="install" and comp_installed(comp):
+        return err("bad_values")
+    if job_busy():
+        return err("busy",409)
+    if action=="install":
+        off=combos_off()-set(comp_combos(comp))
+        put("combos_off",",".join(sorted(off)))
+    cmd=": > %s; bash %s/components.sh %s %s >>%s 2>&1"%(shq(LOGF),shq(BASE),action,comp,shq(LOGF))
+    if comp=="xray" and action=="install":
+        cmd+=" && systemctl restart vpnpanel"
+    e=start_job("component",cmd)
+    if e:
+        return err("system",500,e)
+    return jsonify(ok=True)
 @app.get("/api/accounts")
 @auth
 def lst():
@@ -1078,7 +1303,10 @@ def info(name):
     h=quote(n,safe="")
     items=[]
     p=r["proto"]
-    if p=="ssh" and r["transport"]=="ssl":
+    if p=="ssh" and r["transport"]=="udp":
+        up=udp_port()
+        items=[{"k":"udp_addr","value":"%s:%d@%s:%s"%(dom,up,n,s),"rows":2},{"k":"udp_port","value":str(up),"rows":1},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+    elif p=="ssh" and r["transport"]=="ssl":
         want_tls=t_on and r["tls"] in ("tls","both")
         if want_tls:
             items.append({"k":"ssl_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
@@ -1166,6 +1394,11 @@ def create():
         return err("bad_values")
     if proto!="ssh":
         transport="ws"
+    if transport=="udp":
+        tls="plain"
+    dk=keys_denied(acct_keys(proto,transport,tls))
+    if dk:
+        return err("combo_disabled",400,dk)
     sec=str(d.get("secret") or "").strip()
     if proto in ("vless","vmess"):
         sec=sec.lower() or str(uuid.uuid4())
@@ -1243,6 +1476,14 @@ def edit(name):
                 if d["transport"] not in TRANSPORTS:
                     return err("bad_values")
                 sets["transport"]=d["transport"]
+            ntr=sets.get("transport",r["transport"])
+            if r["proto"]=="ssh" and ntr=="udp":
+                sets["tls"]="plain"
+            ntls=sets.get("tls",r["tls"])
+            if (ntls,ntr)!=(r["tls"],r["transport"]):
+                dk=keys_denied(acct_keys(r["proto"],ntr,ntls))
+                if dk:
+                    return err("combo_disabled",400,dk)
             if "note" in d:
                 sets["note"]=str(d.get("note") or "")[:100]
             if "manual" in d:
@@ -1354,11 +1595,25 @@ def main():
     if cmd=="setdomain":
         put("domain",os.environ["VPN_DOMAIN"])
         return
+    if cmd=="svcs":
+        print(" ".join(expected_units()))
+        return
+    if cmd=="applycomps":
+        c=db()
+        try:
+            apply_components(c)
+        finally:
+            c.close()
+        return
     app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536,PERMANENT_SESSION_LIFETIME=timedelta(hours=24))
     with LOCK:
         c=db()
         nft_apply(c)
         reconcile(c)
+        try:
+            apply_components(c)
+        except Exception:
+            traceback.print_exc()
         c.close()
     threading.Thread(target=worker,daemon=True).start()
     threading.Thread(target=conn_worker,daemon=True).start()
