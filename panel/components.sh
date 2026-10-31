@@ -146,28 +146,20 @@ cat > "$UDPC_DIR/config.json" <<EOT
 EOT
 fi
 chmod 644 "$UDPC_DIR/config.json"
-# Egress firewall: the binary may only answer packets that clients sent first. Any NEW outbound
-# connection from its cgroup to anything except loopback (the local sshd) is dropped.
-# The binary is closed source and verifies the account against the system (sshd/PAM), which
-# needs more than an unprivileged user can do, so it runs as root but confined as below.
+# The binary dials the destinations of the tunnelled traffic itself, so it must be allowed to make
+# outbound connections (blocking them gave a tunnel that connects but carries no traffic).
+# egress.nft now only clears the old drop table and, if sshd is not on port 22, redirects the
+# binary's loopback connections to 22 to the real sshd port.
 local SP
 SP="$(ssh_port)"
 cat > "$UDPC_DIR/egress.nft" <<EOT
 table inet isile_udpc
 delete table inet isile_udpc
-table inet isile_udpc {
- chain out {
-  type filter hook output priority 0; policy accept;
-  socket cgroupv2 level 2 "system.slice/udp-custom.service" ct state new ip daddr != 127.0.0.0/8 counter drop
-  socket cgroupv2 level 2 "system.slice/udp-custom.service" ct state new ip6 daddr != ::1 counter drop
- }
-}
-EOT
-if [ "$SP" != "22" ]; then
-# the binary always talks to 127.0.0.1:22; send that to the real sshd port
-cat >> "$UDPC_DIR/egress.nft" <<EOT
 table ip isile_udpc_nat
 delete table ip isile_udpc_nat
+EOT
+if [ "$SP" != "22" ]; then
+cat >> "$UDPC_DIR/egress.nft" <<EOT
 table ip isile_udpc_nat {
  chain out {
   type nat hook output priority -100; policy accept;
@@ -179,7 +171,7 @@ fi
 chmod 644 "$UDPC_DIR/egress.nft"
 cat > /etc/systemd/system/udp-custom.service <<EOT
 [Unit]
-Description=UDP Custom (third-party closed-source binary, confined)
+Description=UDP Custom (third-party closed-source binary)
 After=network.target ssh.service sshd.service
 [Service]
 User=root
