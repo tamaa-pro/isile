@@ -4,8 +4,8 @@ PUB_PORT=int(os.environ.get("MUX_PUBLIC_PORT","80"))
 TLS_PORT=int(os.environ.get("MUX_TLS_PORT","10444"))
 WEB_PLAIN=int(os.environ.get("MUX_WEB_PLAIN","10080"))
 WEB_TLS=int(os.environ.get("MUX_WEB_TLS","10443"))
-WEB_GRPC=int(os.environ.get("MUX_WEB_GRPC","10445"))
-WEB_GRPC_PLAIN=int(os.environ.get("MUX_WEB_GRPC_PLAIN","10446"))
+WEB_PLAIN_H2=int(os.environ.get("MUX_WEB_PLAIN_H2","10081"))
+WEB_TLS_H2=int(os.environ.get("MUX_WEB_TLS_H2","10442"))
 SNIFF=float(os.environ.get("MUX_SNIFF","2"))
 MAXC=150
 BAN={}
@@ -125,10 +125,8 @@ async def handle(cr,cw,tls):
             sr,sw=await asyncio.open_connection("127.0.0.1",SSH_PORT)
             sw.write(buf)
         else:
-            tp=WEB_TLS if tls else WEB_PLAIN
-            if buf.startswith(b"PRI "):
-                tp=WEB_GRPC if tls else WEB_GRPC_PLAIN
-            sr,sw=await asyncio.open_connection("127.0.0.1",tp)
+            h2=buf.startswith(b"PRI ")
+            sr,sw=await asyncio.open_connection("127.0.0.1",(WEB_TLS_H2 if h2 else WEB_TLS) if tls else (WEB_PLAIN_H2 if h2 else WEB_PLAIN))
             sw.write(proxy_header(ip,sport,443 if tls else 80)+buf)
         await sw.drain()
         await asyncio.gather(pipe(cr,sw),pipe(sr,cw))
