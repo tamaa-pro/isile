@@ -5,7 +5,7 @@ const VERSION=$('meta[name=version]').content;
 const NS='http://www.w3.org/2000/svg';
 const GB=1073741824;
 const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},sshudp:{i:'tower-broadcast',n:'UDP Custom'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
-const THEMES=[['blue','#6366f1','#06b6d4'],['red','#dc2626','#fb7185'],['green','#16a34a','#2dd4bf'],['purple','#8b5cf6','#e879f9'],['cyan','#0891b2','#22d3ee'],['orange','#ea580c','#fbbf24'],['pink','#db2777','#f472b6'],['gold','#d97706','#fde047']];
+const THEMES=[['blue','#6366f1','#06b6d4'],['red','#dc2626','#fb7185'],['green','#16a34a','#2dd4bf'],['purple','#8b5cf6','#e879f9'],['cyan','#0891b2','#22d3ee'],['orange','#ea580c','#fbbf24'],['pink','#db2777','#f472b6'],['gold','#d97706','#fde047'],['navy','#2563eb','#60a5fa'],['teal','#0d9488','#5eead4'],['lime','#84cc16','#d9f99d'],['fuchsia','#c026d3','#f0abfc'],['wine','#9f1239','#f43f5e'],['coffee','#a8734a','#e0b48a'],['slate','#94a3b8','#e2e8f0']];
 const setTheme=v=>{try{localStorage.setItem('theme',v)}catch(e){}document.documentElement.dataset.theme=v};
 const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':a.transport==='udp'?'sshudp':'sshws'):a.proto;
 const SIC={ok:'circle-check',off:'circle-minus',bad:'circle-xmark',warn:'triangle-exclamation'};
@@ -13,7 +13,7 @@ const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
 const api=async(m,u,b)=>{const r=await fetch(u,{method:m,headers:{'Content-Type':'application/json','X-CSRF':csrf},body:b?JSON.stringify(b):undefined,credentials:'same-origin'});if(r.status===401){location.href='/login';throw new Error('unauthorized')}const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error||'error'),{detail:j.detail});return j};
-const spd=(u,d)=>'↓ '+bytes(d)+'/s  ↑ '+bytes(u)+'/s';
+const spd=(u,d)=>'↓ '+speed(d)+'  ↑ '+speed(u);
 const bytes=n=>{if(!n||n<0)return'0 B';const u=['B','KB','MB','GB','TB','PB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),5);return(n/1024**i).toFixed(i?2:0)+' '+u[i]};
 const upt=s=>{const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?t('d_short',d)+' ':'')+t('h_short',h)+' '+t('m_short',m)};
 const rnd=n=>{const c='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=new Uint32Array(n);crypto.getRandomValues(a);return Array.from(a,x=>c[x%c.length]).join('')};
@@ -259,7 +259,7 @@ const row1=el('div',{class:'grid'},
 tile('microchip','c1',t('d_cpu'),s.cpu.toFixed(1)+'%',t('d_cores',s.cores)+' · '+t('d_load')+' '+s.load[0].toFixed(2),[spark(H.cpu,'s1',100),coresGrid(s)]),
 tile('memory','c2',t('d_ram'),ramP.toFixed(1)+'%',bytes(s.mem_used)+' / '+bytes(s.mem_total),spark(H.ram,'s2',100)),
 tile('hard-drive','c3',t('d_disk'),diskP.toFixed(1)+'%',bytes(s.disk_used)+' / '+bytes(s.disk_total),meter(diskP,diskP>90?'bad':'')),
-tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+bytes(rx)+'/s'),'↑ '+bytes(tx)+'/s',spark(H.rx,'s4')),
+tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+speed(rx)),'↑ '+speed(tx),spark(H.rx,'s4')),
 portsTile(s.ports||[]));
 const trf=trafficTile(s);
 const row2=el('div',{class:'grid'},
@@ -286,7 +286,7 @@ return tile('plug','c6',t('pt_title'),on+' / '+tot,t('pt_sub'),el('div',{class:'
 function accRow(a){
 const used=a.up+a.down;
 const act=a.status==='active';
-const tlsTag=a.transport==='udp'?'UDP':a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
+const tlsTag=tagOf(a);
 return el('tr',{},
 el('td',{},el('b',{},sti(a),a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
@@ -340,7 +340,7 @@ el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{class:'dtv
 el('div',{class:'kv'},el('span',{},ic('hourglass-half'),t('c_left')),el('b',{},left(r.expires))),
 r.note?el('div',{class:'note-b'},el('span',{},ic('note-sticky'),t('f_note')),el('div',{class:'note-t'},r.note)):null);
 const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
-const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy'))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
+const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('div',{class:'acts'},i.k==='page'?el('a',{class:'icon-btn',href:i.value,target:'_blank',rel:'noopener noreferrer',title:t('open'),'aria-label':t('open')},ic('arrow-up-right-from-square')):null,el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy')))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
 modal(t('i_title',n),el('div',{},head,warn,...items))
 }catch(e){terr(e)}
 }
@@ -381,7 +381,7 @@ const tlsOpts=()=>[{v:'tls',l:t('tls_tls'),i:'lock'},{v:'plain',l:t('tls_plain')
 const selKeys=()=>{if(st.kind==='v2'||!isUdp()){const b=baseOf(st.kind,st.proto,st.transport);return(st.tls==='both'?['tls','plain']:[st.tls]).map(m=>b+':'+m)}return['sshudp:udp']};
 const kindSeg=seg(kindOpts(),st.kind,v=>{st.kind=v;sync()});
 const protoSeg=seg(protoOpts(),st.proto,v=>{st.proto=v;sync()});
-const tlsSeg=seg(tlsOpts(),st.tls,v=>{st.tls=v});
+const tlsSeg=seg(tlsOpts(),st.tls,v=>{st.tls=v});tlsSeg.classList.add('s3');
 const transportSeg=seg(trOpts(),st.transport,v=>{st.transport=v;sync()});
 const tlsHint=el('div',{class:'hint'},ic('triangle-exclamation'),t('tls_unavailable'));
 const unav=el('div',{class:'hint'},ic('circle-info'),t('f_unavail_hint'));
@@ -531,7 +531,7 @@ const resetMonth=()=>ask(t('lim_reset_confirm'),t('lim_reset'),async()=>{try{awa
 const themeBox=el('div',{class:'dc'});
 const drawTheme=()=>{const cur=document.documentElement.dataset.theme;
 themeBox.replaceChildren(
-field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'light',l:t('theme_light'),i:'sun'}],cur,v=>{setTheme(v);drawTheme()})),
+field(t('s_theme'),seg([{v:'dark',l:t('theme_dark'),i:'moon'},{v:'gray',l:t('theme_gray'),i:'circle-half-stroke'},{v:'light',l:t('theme_light'),i:'sun'}],cur,v=>{setTheme(v);drawTheme()})),
 field(t('s_color_theme'),dd(THEMES.map(x=>({v:x[0],l:t('th_'+x[0]),c:'linear-gradient(135deg,'+x[1]+','+x[2]+')'})),THEMES.some(x=>x[0]===cur)?cur:'',v=>{setTheme(v);drawTheme()},210,t('theme_choose'))))};
 drawTheme();
 const row=(icon,title,desc,b)=>el('div',{class:'srow'},el('span',{class:'ico c1'},ic(icon)),el('div',{class:'srow-t'},el('b',{},title),el('div',{class:'muted sm'},desc)),b);
@@ -573,6 +573,7 @@ $('#view').replaceChildren(el('div',{class:'stack'},
 panel('palette',t('s_appearance'),el('div',{class:'form cols lg'},
 themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
+field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}],SPU,v=>{setSpu(v);toast(t('done'))}),t('s_speed_hint')),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))))),
 panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')))),

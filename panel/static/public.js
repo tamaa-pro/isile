@@ -23,7 +23,7 @@ const box=$('#pub');
 if(NF){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('circle-exclamation'),el('div',{},t('p_not_found'))));return}
 if(!D){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('spinner','fa-spin')));return}
 const a=D,K=pk(a),used=a.up+a.down,now=Date.now()/1000;
-const tlsTag=a.transport==='udp'?'UDP':a.tls==='both'?'TLS + 80':a.tls==='tls'?'TLS 443':'80';
+const tlsTag=tagOf(a);
 const pc=a.quota?used/a.quota*100:0;
 let vp=null;
 if(a.expires&&a.created&&a.expires>a.created)vp=Math.max(0,Math.min(100,(a.expires-now)/(a.expires-a.created)*100));
@@ -35,7 +35,7 @@ el('div',{class:'row'},el('span',{class:'pb p-'+K},ic(PM[K]?PM[K].i:'shield-halv
 loc(a.cc),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},el('span',{class:'dot'+(a.active?' live':'')}),t(a.active?'live_on':'live_off'))),
 a.proto==='ssh'?kv('plug',t('c_conn'),a.conn+' / '+(a.conn_limit||'∞')):null,
-kv('gauge-high',t('p_speed'),'↓ '+bytes(a.sp_down)+'/s  ↑ '+bytes(a.sp_up)+'/s'),
+kv('gauge-high',t('p_speed'),'↓ '+speed(a.sp_down)+'  ↑ '+speed(a.sp_up)),
 el('div',{class:'pub-sec'},
 kv('chart-line',t('c_usage'),bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),
 a.quota?meter(pc,pc>90?'bad':''):null,
