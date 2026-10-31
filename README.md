@@ -1,6 +1,6 @@
 # isile — لوحة تحكم VPN
 
-الإصدار الحالي: **1.6**
+الإصدار الحالي: **1.6.4**
 
 لوحة ويب خفيفة لإدارة حسابات الاتصال على خادم Ubuntu، تجمع عدة بروتوكولات في مكان واحد.
 
@@ -12,9 +12,9 @@
 |---|---|---|
 | SSH + WebSocket | ✔ | ✔ |
 | SSH + SSL (SSH مباشر بدون WebSocket) | ✔ | ✔ |
-| VLESS + WebSocket | ✔ | ✔ |
-| VMess + WebSocket | ✔ | ✔ |
-| Trojan + WebSocket | ✔ | ✔ |
+| VLESS + WebSocket أو gRPC | ✔ | ✔ |
+| VMess + WebSocket أو gRPC | ✔ | ✔ |
+| Trojan + WebSocket أو gRPC | ✔ | ✔ |
 | UDP Custom (اختياري، طرف ثالث) | منفذ UDP مستقل | — |
 
 
@@ -55,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tamaa-pro/isile/main/install
 
 80 بدون TLS، و443 مع TLS (يحتاج نطاقاً)، و2080 للوحة، ومنفذ SSH الحالي، و36712/UDP لـ UDP Custom إن ثُبّت. المنافذ ثابتة ولا تُغيَّر من اللوحة.
 
-مسارات الاتصال: `/vless` و`/vmess` و`/trojan` لـ V2Ray، وأي مسار آخر بترويسة `Upgrade: websocket` يذهب إلى SSH WebSocket، وSSH SSL المباشر بصيغة `النطاق:المنفذ@المستخدم:كلمة_المرور`.
+مسارات الاتصال: `/vless` و`/vmess` و`/trojan` لـ V2Ray WebSocket، وأسماء الخدمة `vless-grpc` و`vmess-grpc` و`trojan-grpc` لـ V2Ray gRPC، وأي مسار آخر بترويسة `Upgrade: websocket` يذهب إلى SSH WebSocket، وSSH SSL المباشر بصيغة `النطاق:المنفذ@المستخدم:كلمة_المرور`.
 
 ## هيكل المستودع
 
@@ -94,8 +94,10 @@ isile/
 
 ```
 العام (80)  ──► vpnmux ──┬─ يبدأ بـ SSH- ──► sshd
+                         ├─ PRI (HTTP/2، أي gRPC) ► nginx (10081) ──► V2Ray gRPC
                          └─ غير ذلك ───────► nginx (10080) ──► V2Ray / SSH WebSocket
 العام (443) ──► stunnel (يفك TLS) ──► vpnmux ──┬─ SSH- ──► sshd
+                                               ├─ PRI (HTTP/2، أي gRPC) ► nginx (10442) ──► V2Ray gRPC
                                                └─ غير ذلك ► nginx (10443) ──► V2Ray / SSH WebSocket
 ```
 
@@ -121,4 +123,5 @@ isile/
 
 - يُعاد تشغيل Xray عند تغيير حسابات V2Ray فتنقطع اتصالاتها لثانية، وحسابات SSH لا تتأثر.
 - إن كان تطبيقك يفحص الشهادة بـ SNI مختلف عن النطاق فعّل allowInsecure.
+- نوع النقل (WebSocket أو gRPC) لحساب V2Ray يُختار عند الإنشاء ويمكن تغييره من التعديل، ويعمل gRPC على 80 بدون TLS وعلى 443 مع TLS. يحتاج العميل إلى دعم gRPC (مثل v2rayN وv2rayNG وStreisand وSing-box).
 - خيار TLS أو WebSocket أو SSL لحساب SSH يحدد بيانات الاتصال المعروضة فقط ولا يقيّد المسار فعلياً.
