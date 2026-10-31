@@ -7,23 +7,22 @@ PY="$APP/venv/bin/python"
 dbget(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);r=c.execute("SELECT v FROM settings WHERE k=?",(sys.argv[2],)).fetchone();print(r[0] if r else "")' "$DATA/panel.db" "$1"; }
 dbq(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);[print(*r) for r in c.execute(sys.argv[2])]' "$DATA/panel.db" "$1"; }
 show_info(){
-local d u ip sc h hp hs pp
+local d u ip sc h
 d="$(dbget domain)"
 ip="$(dbget server_ip)"
-hp="$(dbget port_http)"; hp="${hp:-80}"; hs="$(dbget port_https)"; hs="${hs:-443}"; pp="$(dbget port_panel)"; pp="${pp:-2080}"
 u="$(dbget admin_user)"
 if [ -n "$d" ]; then sc=https; h="$d"; else sc=http; h="${ip:-server-address}"; fi
 echo "=================================================="
 echo "  isile panel info"
 echo "=================================================="
 echo " Version   : $(cat "$APP/panel/VERSION" 2>/dev/null)"
-echo " Panel URL : $sc://$h:$pp"
+echo " Panel URL : $sc://$h:2080"
 echo " Username  : $u"
 echo " Password  : (stored hashed, use option 1 to set a new one)"
 echo " Domain    : ${d:-not set (server address, no TLS)}"
 echo " Server IP : ${ip:-unknown}"
-if [ -n "$d" ]; then echo " Ports     : $hp (no TLS) | $hs (TLS) | $pp (panel, HTTPS)"; else echo " Ports     : $hp (no TLS) | $pp (panel, HTTP)"; fi
-if [ -n "$d" ]; then echo " SSH SSL   : direct SSH on $hp (no TLS) and $hs (TLS via stunnel)"; else echo " SSH SSL   : direct SSH on $hp (no TLS)"; fi
+if [ -n "$d" ]; then echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel, HTTPS)"; else echo " Ports     : 80 (no TLS) | 2080 (panel, HTTP)"; fi
+if [ -n "$d" ]; then echo " SSH SSL   : direct SSH on 80 (no TLS) and 443 (TLS via stunnel)"; else echo " SSH SSL   : direct SSH on 80 (no TLS)"; fi
 echo " Paths     : /vless /vmess /trojan (any other path = SSH WebSocket)"
 echo " Services  :"
 local svcs="vpnpanel vpnbridge vpnmux xray nginx udp-custom" st
@@ -98,7 +97,7 @@ rm -f /etc/nginx/conf.d/vpnpanel.conf
 nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
 [ -z "$d" ] || certbot delete --cert-name "$d" --non-interactive >/dev/null 2>&1
 rm -f /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
-for p in "$(dbget port_panel)" "$(dbget port_http)" "$(dbget port_https)" 2080 80 443; do [ -z "$p" ] || ufw delete allow "$p/tcp" >/dev/null 2>&1; done
+for p in 2080 80 443; do ufw delete allow "$p/tcp" >/dev/null 2>&1; done
 rm -rf "$APP" "$DATA" /etc/vpnpanel /usr/local/etc/xray /usr/local/share/xray /usr/local/bin/xray /var/log/xray /etc/logrotate.d/vpnpanel-xray /var/log/isile-install.log
 echo "=================================================="
 echo "  isile was uninstalled completely"

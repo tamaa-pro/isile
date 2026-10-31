@@ -38,8 +38,6 @@ COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls",
 COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray"}
 REMOVABLE=("wsbridge","udpcustom","xray")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
-PORT_DEF={"http":80,"https":443,"panel":2080}
-PORT_RES={8000,10022,10085,10080,10443,10444,10001,10002,10003,10011,10012,10013}
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
 UUID_RE=re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -112,14 +110,6 @@ def host():
     return get("domain","") or get("server_ip","")
 def tls_on():
     return bool(get("domain",""))
-def port_of(k):
-    try:
-        v=int(get("port_"+k,PORT_DEF[k]))
-        if 0<v<65536:
-            return v
-    except (TypeError,ValueError):
-        pass
-    return PORT_DEF[k]
 def sh(args,inp=None):
     return subprocess.run(args,input=inp,capture_output=True,text=True,timeout=40)
 def gen_pass():
@@ -355,7 +345,7 @@ def speed_of(n):
         return 0,0
     return int(sp[0]),int(sp[1])
 def page_url(n):
-    return "%s://%s:%d/%s"%("https" if tls_on() else "http",host(),port_of("panel"),n)
+    return "%s://%s:2080/%s"%("https" if tls_on() else "http",host(),n)
 def public_on():
     return get("public_page","0")=="1"
 def client_of(r):
@@ -851,10 +841,10 @@ def listening_udp():
 def ports_info():
     ls=listening_ports()
     t=tls_on()
-    rows=[("ssh",ssh_port(),True,ls),("http",port_of("http"),True,ls),("https",port_of("https"),t,ls),("panel",port_of("panel"),True,ls)]
+    rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",2080,True,ls)]
     if comp_installed("udpcustom"):
         rows.append(("udp",udp_port(),comp_on("udpcustom"),listening_udp()))
-    return [{"k":k,"port":p,"enabled":en,"listening":en and p in l,"editable":k!="ssh"} for k,p,en,l in rows]
+    return [{"k":k,"port":p,"enabled":en,"listening":en and p in l} for k,p,en,l in rows]
 @app.get("/api/stats")
 @auth
 def stats():
@@ -1109,8 +1099,6 @@ def domain_set():
         return err("bad_domain")
     if email and not EMAIL_RE.match(email):
         return err("bad_email")
-    if port_of("http")!=80:
-        return err("port_http_tls")
     e=start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email)))
     if e:
         return err("system",500,e)
@@ -1282,49 +1270,6 @@ def comp_action(comp,action):
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
-@app.get("/api/ports")
-@auth
-def ports_get():
-    return jsonify(ports=ports_info(),internal=sorted(PORT_RES),tls=tls_on())
-@app.post("/api/ports")
-@auth
-def ports_set():
-    d=request.get_json(silent=True) or {}
-    cur={k:port_of(k) for k in PORT_DEF}
-    new=dict(cur)
-    udp=comp_installed("udpcustom")
-    ucur=udp_port() if udp else 0
-    unew=ucur
-    try:
-        for k in PORT_DEF:
-            if k in d:
-                new[k]=int(d[k])
-        if udp and "udp" in d:
-            unew=int(d["udp"])
-    except (TypeError,ValueError):
-        return err("bad_port")
-    if any(not 1<=v<=65535 for v in list(new.values())+([unew] if udp else [])):
-        return err("bad_port")
-    tcp=list(new.values())+[ssh_port()]
-    if len(set(tcp))!=len(tcp):
-        return err("port_dup")
-    if any(v in PORT_RES for v in new.values()):
-        return err("port_reserved")
-    if tls_on() and new["http"]!=80:
-        return err("port_http_tls")
-    ch=[k for k in PORT_DEF if new[k]!=cur[k]]
-    chu=udp and unew!=ucur
-    if not ch and not chu:
-        return err("bad_values")
-    if any(new[k] in listening_ports() for k in ch) or (chu and unew in listening_udp()):
-        return err("port_busy")
-    if job_busy():
-        return err("busy",409)
-    cmd=": > %s; bash %s/setdomain.sh --ports %d %d %d %d >>%s 2>&1"%(shq(LOGF),shq(BASE),new["http"],new["https"],new["panel"],unew if udp else 0,shq(LOGF))
-    e=start_job("ports",cmd)
-    if e:
-        return err("system",500,e)
-    return jsonify(ok=True)
 @app.get("/api/accounts")
 @auth
 def lst():
@@ -1341,7 +1286,7 @@ def lst():
     c.close()
     return jsonify(rows)
 def vmess_link(n,s,dom,tls):
-    o={"v":"2","ps":n+("-TLS" if tls else "-%d"%port_of("http")),"add":dom,"port":str(port_of("https") if tls else port_of("http")),"id":s,"aid":"0","scy":"auto","net":"ws","type":"none","host":dom,"path":"/vmess","tls":"tls" if tls else "","sni":dom if tls else ""}
+    o={"v":"2","ps":n+("-TLS" if tls else "-80"),"add":dom,"port":"443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"ws","type":"none","host":dom,"path":"/vmess","tls":"tls" if tls else "","sni":dom if tls else ""}
     return "vmess://"+base64.b64encode(json.dumps(o,separators=(",",":")).encode()).decode()
 @app.get("/api/accounts/<name>/info")
 @auth
@@ -1353,8 +1298,6 @@ def info(name):
         return err("not_found",404)
     dom=host()
     t_on=tls_on()
-    hp=port_of("http")
-    sp=port_of("https")
     s=r["secret"]
     n=r["name"]
     h=quote(n,safe="")
@@ -1366,18 +1309,18 @@ def info(name):
     elif p=="ssh" and r["transport"]=="ssl":
         want_tls=t_on and r["tls"] in ("tls","both")
         if want_tls:
-            items.append({"k":"ssl_tls","value":"%s:%d@%s:%s"%(dom,sp,n,s),"rows":2})
+            items.append({"k":"ssl_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
         if r["tls"] in ("plain","both"):
-            items.append({"k":"ssl_plain","value":"%s:%d@%s:%s"%(dom,hp,n,s),"rows":2})
+            items.append({"k":"ssl_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
         if want_tls:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh":
         items=[{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
         if r["tls"] in ("plain","both"):
-            items.insert(0,{"k":"ssh_plain","value":"%s:%d@%s:%s"%(dom,hp,n,s),"rows":2})
+            items.insert(0,{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
         if t_on and r["tls"] in ("tls","both"):
-            items.insert(0,{"k":"ssh_tls","value":"%s:%d@%s:%s"%(dom,sp,n,s),"rows":2})
+            items.insert(0,{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
     else:
         for m in (MODES if r["tls"]=="both" else (r["tls"],)):
             tls=m=="tls"
@@ -1386,9 +1329,9 @@ def info(name):
             if p=="vmess":
                 v=vmess_link(n,s,dom,tls)
             elif p=="vless":
-                v="vless://%s@%s:%d?encryption=none&security=%s&%stype=ws&host=%s&path=%%2Fvless#%s"%(s,dom,sp if tls else hp,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-%d"%hp))
+                v="vless://%s@%s:%d?encryption=none&security=%s&%stype=ws&host=%s&path=%%2Fvless#%s"%(s,dom,443 if tls else 80,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-80"))
             else:
-                v="trojan://%s@%s:%d?security=%s&%stype=ws&host=%s&path=%%2Ftrojan#%s"%(quote(s,safe=""),dom,sp if tls else hp,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-%d"%hp))
+                v="trojan://%s@%s:%d?security=%s&%stype=ws&host=%s&path=%%2Ftrojan#%s"%(quote(s,safe=""),dom,443 if tls else 80,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-80"))
             items.append({"k":"link_tls" if tls else "link_plain","value":v,"rows":4})
         items.append({"k":"pass" if p=="trojan" else "uuid","value":s,"rows":1})
     if public_on():
