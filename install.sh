@@ -226,6 +226,7 @@ After=network.target
 User=nobody
 Group=nogroup
 Environment=SSH_PORT=$SSH_PORT
+EnvironmentFile=-/etc/vpnpanel/ports.env
 ExecStart=/usr/bin/python3 $APP/panel/sshmux.py
 Restart=always
 RestartSec=3
@@ -291,9 +292,12 @@ fi
 STEP="starting services and firewall"
 echo "[8/8] Starting services"
 L ufw allow "$SSH_PORT/tcp"
-L ufw allow 80/tcp
-if [ -n "$DOMAIN" ]; then L ufw allow 443/tcp; fi
-L ufw allow 2080/tcp
+HP="$(dbget port_http)"; HP="${HP:-80}"
+HS="$(dbget port_https)"; HS="${HS:-443}"
+HA="$(dbget port_panel)"; HA="${HA:-2080}"
+L ufw allow "$HP/tcp"
+if [ -n "$DOMAIN" ]; then L ufw allow "$HS/tcp"; fi
+L ufw allow "$HA/tcp"
 L ufw --force enable
 L systemctl daemon-reload
 EN="vpnpanel vpnmux"
@@ -367,34 +371,34 @@ fi
 if [ -n "$DOMAIN" ]; then SCHEME=https; PUB="$DOMAIN"; else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
 CODE=000
 for i in $(seq 1 20); do
-CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:2080/login" || true)"
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:$HA/login" || true)"
 [ "$CODE" = 200 ] && break
 sleep 1
 done
 if [ "$CODE" != 200 ]; then
 journalctl -u vpnpanel -n 12 --no-pager >>"$LOG" 2>&1 || true
-die "the panel did not answer on port 2080 (HTTP $CODE)"
+die "the panel did not answer on port $HA (HTTP $CODE)"
 fi
 echo
 echo "=================================================="
 if [ "$MODE" = update ]; then
 echo "  isile updated successfully ($OLDV -> $NEWV)"
 echo "=================================================="
-echo " Panel URL : $SCHEME://$PUB:2080"
+echo " Panel URL : $SCHEME://$PUB:$HA"
 echo " Your admin credentials were not changed."
 else
 echo "  isile $NEWV installed successfully"
 echo "=================================================="
-echo " Panel URL : $SCHEME://$PUB:2080"
+echo " Panel URL : $SCHEME://$PUB:$HA"
 echo " Username  : $ADMIN_USER"
 echo " Password  : $ADMIN_PASS"
 echo "--------------------------------------------------"
 if [ -n "$DOMAIN" ]; then
-echo " Open ports 80, 443, 2080 and your SSH port in the cloud firewall."
+echo " Open ports $HP, $HS, $HA and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS) and 443 (TLS via stunnel)."
 else
 echo " No domain: the panel and connections use plain HTTP without TLS."
-echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
+echo " Open ports $HP, $HA and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS). TLS needs a domain."
 echo " You can add a domain later from the panel Settings."
 fi
