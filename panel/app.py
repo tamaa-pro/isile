@@ -34,10 +34,12 @@ UDPC_BIN=UDPC_DIR+"/udp-custom"
 UDPC_CONF=UDPC_DIR+"/config.json"
 UDPC_INFO="/etc/vpnpanel/udp-custom.info"
 UDPC_PORT=36712
-COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"))
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("vlessgrpc","tls","xray"),("vmessgrpc","tls","xray"),("trojangrpc","tls","xray"),("vlessgrpc","plain","xray"),("vmessgrpc","plain","xray"),("trojangrpc","plain","xray"))
 COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray"}
 REMOVABLE=("wsbridge","udpcustom","xray")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
+GRPC_PORTS={("vless","tls"):10031,("trojan","tls"):10032,("vmess","tls"):10033,("vless","plain"):10041,("trojan","plain"):10042,("vmess","plain"):10043}
+GRPC_FLAG="/etc/vpnpanel/grpc.ok"
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
 UUID_RE=re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -257,6 +259,8 @@ def combo_info(off=None):
             why="disabled"
         elif m=="tls" and not t:
             why="no_tls"
+        elif p.endswith("grpc") and m=="tls" and not os.path.exists(GRPC_FLAG):
+            why="no_grpc"
         out.append({"k":k,"p":p,"m":m,"c":c,"enabled":k not in off,"installed":inst[c],"avail":not why,"why":why})
     return out
 def acct_keys(proto,transport,tls):
@@ -265,7 +269,7 @@ def acct_keys(proto,transport,tls):
             return ["sshudp:udp"]
         base="sshws" if transport=="ws" else "sshssl"
     else:
-        base=proto
+        base=proto+("grpc" if transport=="grpc" else "")
     return [base+":"+m for m in (MODES if tls=="both" else (tls,))]
 def keys_denied(keys):
     off=combos_off()
@@ -273,6 +277,8 @@ def keys_denied(keys):
     for k in keys:
         c=cm.get(k)
         if not c or not comp_installed(c) or k in off:
+            return k
+        if k.endswith("grpc:tls") and not os.path.exists(GRPC_FLAG):
             return k
     return ""
 def expected_units():
@@ -487,7 +493,13 @@ def placeholder(sk,p,m):
 def xray_conf(c):
     sk=get("secret_key")
     cl={(p,m):[] for p in V2 for m in MODES}
+    clg={(p,m):[] for p in V2 for m in MODES}
     for r in c.execute("SELECT * FROM accounts WHERE status='active' AND proto IN ('vless','vmess','trojan') ORDER BY name"):
+        if r["transport"]=="grpc":
+            for m in (MODES if r["tls"]=="both" else (r["tls"],)):
+                if (r["proto"],m) in clg:
+                    clg[(r["proto"],m)].append(client_of(r))
+            continue
         for m in (MODES if r["tls"]=="both" else (r["tls"],)):
             if (r["proto"],m) in cl:
                 cl[(r["proto"],m)].append(client_of(r))
@@ -498,6 +510,12 @@ def xray_conf(c):
             if p=="vless":
                 st["decryption"]="none"
             inb.append({"tag":p+"-"+m,"listen":"127.0.0.1","port":PORTS[(p,m)],"protocol":p,"settings":st,"streamSettings":{"network":"ws","wsSettings":{"path":"/"+p}}})
+    for p in V2:
+        for m in MODES:
+            st={"clients":clg[(p,m)] or [placeholder(sk,p,"grpc-"+m)]}
+            if p=="vless":
+                st["decryption"]="none"
+            inb.append({"tag":p+"-grpc-"+m,"listen":"127.0.0.1","port":GRPC_PORTS[(p,m)],"protocol":p,"settings":st,"streamSettings":{"network":"grpc","grpcSettings":{"serviceName":p+"grpc"}}})
     return {
         "log":{"access":"none","loglevel":"warning"},
         "stats":{},
@@ -1411,9 +1429,20 @@ def lst():
         rows.append(o)
     c.close()
     return jsonify(rows)
-def vmess_link(n,s,dom,tls):
+def vmess_link(n,s,dom,tls,grpc=False):
     o={"v":"2","ps":n+("-TLS" if tls else "-80"),"add":dom,"port":"443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"ws","type":"none","host":dom,"path":"/vmess","tls":"tls" if tls else "","sni":dom if tls else ""}
+    if grpc:
+        o.update({"ps":n+("-gRPC" if tls else "-gRPC-80"),"net":"grpc","type":"gun","host":"","path":"vmessgrpc","alpn":"h2" if tls else ""})
     return "vmess://"+base64.b64encode(json.dumps(o,separators=(",",":")).encode()).decode()
+def grpc_link(p,n,s,dom,h,tls):
+    if p=="vmess":
+        return vmess_link(n,s,dom,tls,True)
+    q=("security=tls&sni=%s&fp=chrome&alpn=h2&"%dom if tls else "security=none&")+"type=grpc&serviceName=%sgrpc&mode=gun"%p
+    port=443 if tls else 80
+    tag=h+("-gRPC" if tls else "-gRPC-80")
+    if p=="vless":
+        return "vless://%s@%s:%d?encryption=none&%s#%s"%(s,dom,port,q,tag)
+    return "trojan://%s@%s:%d?%s#%s"%(quote(s,safe=""),dom,port,q,tag)
 @app.get("/api/accounts/<name>/info")
 @auth
 def info(name):
@@ -1452,7 +1481,10 @@ def info(name):
             tls=m=="tls"
             if tls and not t_on:
                 continue
-            if p=="vmess":
+            g=r["transport"]=="grpc"
+            if g:
+                v=grpc_link(p,n,s,dom,h,tls)
+            elif p=="vmess":
                 v=vmess_link(n,s,dom,tls)
             elif p=="vless":
                 v="vless://%s@%s:%d?encryption=none&security=%s&%stype=ws&host=%s&path=%%2Fvless#%s"%(s,dom,443 if tls else 80,"tls" if tls else "none","sni=%s&fp=chrome&"%dom if tls else "",dom,h+("-TLS" if tls else "-80"))
@@ -1516,10 +1548,10 @@ def create():
     if tls not in ("tls","plain","both"):
         return err("bad_values")
     transport=d.get("transport","ws")
-    if transport not in TRANSPORTS:
+    if transport not in TRANSPORTS+("grpc",) or (proto=="ssh" and transport=="grpc"):
         return err("bad_values")
     if proto!="ssh":
-        transport="ws"
+        transport="grpc" if transport=="grpc" else "ws"
     if transport=="udp":
         tls="plain"
     dk=keys_denied(acct_keys(proto,transport,tls))
@@ -1600,6 +1632,10 @@ def edit(name):
                 sets["tls"]=d["tls"]
             if d.get("transport") and r["proto"]=="ssh":
                 if d["transport"] not in TRANSPORTS:
+                    return err("bad_values")
+                sets["transport"]=d["transport"]
+            elif d.get("transport") and r["proto"]!="ssh":
+                if d["transport"] not in ("ws","grpc"):
                     return err("bad_values")
                 sets["transport"]=d["transport"]
             ntr=sets.get("transport",r["transport"])

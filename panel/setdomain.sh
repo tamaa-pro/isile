@@ -3,6 +3,30 @@ set -Eeuo pipefail
 APP=/opt/vpnpanel
 LOG=/var/log/isile-install.log
 [ "$(id -u)" -eq 0 ] || { echo "run as root"; exit 1; }
+alpn_ok(){
+# stunnel must accept the ALPN option (gRPC clients need h2 negotiated); test it with the real binary
+local b t pid ok=1
+b="$(command -v stunnel4 || command -v stunnel || true)"
+[ -n "$b" ] || return 1
+t="$(mktemp)"
+cat > "$t" <<EOT
+foreground = yes
+pid =
+[alpn-test]
+accept = 127.0.0.1:10999
+connect = 127.0.0.1:10998
+cert = /etc/letsencrypt/live/$1/fullchain.pem
+key = /etc/letsencrypt/live/$1/privkey.pem
+ALPN = http/1.1,h2
+EOT
+"$b" "$t" >/dev/null 2>&1 &
+pid=$!
+sleep 1
+if kill -0 "$pid" 2>/dev/null; then ok=0; kill "$pid" 2>/dev/null || true; fi
+wait "$pid" 2>/dev/null || true
+rm -f "$t"
+return $ok
+}
 render(){
 local d="${1:-}" tls=0 LST SSL HSTS PROTO WS SSHWS RIP
 if [ -n "$d" ] && [ -s "/etc/letsencrypt/live/$d/fullchain.pem" ]; then tls=1; fi
@@ -37,6 +61,22 @@ location ^~ /trojan { proxy_pass http://127.0.0.1:10012; $WS }
 location / { $SSHWS $WS }
 }
 EOT
+cat <<EOT
+server {
+listen 127.0.0.1:10446 http2 proxy_protocol;
+$RIP
+server_name _;
+server_tokens off;
+client_max_body_size 0;
+client_body_timeout 1h;
+grpc_read_timeout 1h;
+grpc_send_timeout 1h;
+location ^~ /vlessgrpc { grpc_pass grpc://127.0.0.1:10041; }
+location ^~ /vmessgrpc { grpc_pass grpc://127.0.0.1:10043; }
+location ^~ /trojangrpc { grpc_pass grpc://127.0.0.1:10042; }
+location / { return 404; }
+}
+EOT
 if [ "$tls" = 1 ]; then
 cat <<EOT
 server {
@@ -48,6 +88,20 @@ location ^~ /vless { proxy_pass http://127.0.0.1:10001; $WS }
 location ^~ /vmess { proxy_pass http://127.0.0.1:10003; $WS }
 location ^~ /trojan { proxy_pass http://127.0.0.1:10002; $WS }
 location / { $SSHWS $WS }
+}
+server {
+listen 127.0.0.1:10445 http2 proxy_protocol;
+$RIP
+server_name _;
+server_tokens off;
+client_max_body_size 0;
+client_body_timeout 1h;
+grpc_read_timeout 1h;
+grpc_send_timeout 1h;
+location ^~ /vlessgrpc { grpc_pass grpc://127.0.0.1:10031; }
+location ^~ /vmessgrpc { grpc_pass grpc://127.0.0.1:10033; }
+location ^~ /trojangrpc { grpc_pass grpc://127.0.0.1:10032; }
+location / { return 404; }
 }
 EOT
 fi
@@ -71,6 +125,8 @@ EOT
 } > /etc/nginx/conf.d/vpnpanel.conf
 if [ "$tls" = 1 ]; then
 install -d -m755 /etc/vpnpanel
+ALPN=""
+if alpn_ok "$d"; then ALPN="ALPN = http/1.1,h2"; : > /etc/vpnpanel/grpc.ok; else rm -f /etc/vpnpanel/grpc.ok; echo "stunnel does not support ALPN: gRPC stays disabled"; fi
 cat > /etc/vpnpanel/stunnel.conf <<EOT
 foreground = yes
 pid =
@@ -86,10 +142,11 @@ connect = 127.0.0.1:10444
 cert = /etc/letsencrypt/live/$d/fullchain.pem
 key = /etc/letsencrypt/live/$d/privkey.pem
 protocol = proxy
+$ALPN
 EOT
 chmod 600 /etc/vpnpanel/stunnel.conf
 else
-rm -f /etc/vpnpanel/stunnel.conf
+rm -f /etc/vpnpanel/stunnel.conf /etc/vpnpanel/grpc.ok
 fi
 nginx -t
 }
