@@ -443,32 +443,6 @@ const load=async()=>{try{const r=await api('GET','/api/logs/'+k+'?n=500');pre.te
 const d=modal(t('lg_'+k),pre,[btn(t('lg_refresh'),'rotate',load),btn(t('lg_download'),'download',()=>dlLog(k)),btn(t('lg_clear'),'eraser',()=>clearLog(k,async()=>{await load();if(after)await after()}),'dgr')],'wide');
 await load()
 }
-function portsBox(){
-const box=el('div',{class:'form cols'},el('div',{class:'empty'},ic('spinner','fa-spin')));
-let ins={},cur={};
-const save=()=>{
-const b={};let ch=false;
-for(const k in ins){const v=parseInt(ins[k].value,10);if(!(v>=1&&v<=65535)){toast(t('e_bad_port'));return}b[k]=v;if(v!==cur[k])ch=true}
-if(!ch){toast(t('pp_nochange'));return}
-const go=b.panel&&b.panel!==cur.panel?location.protocol+'//'+location.hostname+':'+b.panel+'/':undefined;
-ask(t('pp_confirm'),t('save'),()=>{runJob('/api/ports',b,t('pp_working'),go)},{danger:false})
-};
-const fill=async()=>{
-try{
-const r=await api('GET','/api/ports');
-ins={};cur={};
-const rows=r.ports.map(p=>{
-if(!p.editable)return field(t('pt_'+p.k),el('input',{value:p.port,dir:'ltr',disabled:true}),t('pp_ssh_hint'));
-const i=el('input',{type:'number',min:'1',max:'65535',value:p.port,dir:'ltr',inputmode:'numeric'});
-ins[p.k]=i;cur[p.k]=p.port;
-return field(t('pt_'+p.k),i,p.k==='http'&&r.tls?t('pp_tls_hint'):null)
-});
-box.replaceChildren(el('div',{class:'muted sm'},t('pp_desc')),...rows,el('small',{class:'muted'},t('pp_internal',r.internal.join(' '))),el('div',{class:'row'},btn(t('save'),'floppy-disk',save,'pri')))
-}catch(e){terr(e)}
-};
-fill();
-return box
-}
 function compsBox(){
 const ML={tls:t('cb_tls'),plain:t('cb_plain'),udp:t('cb_udp')};
 const V2R=['vless','vmess','trojan'].flatMap(p=>['tls','plain'].map(m=>[p,m]));
@@ -544,7 +518,7 @@ verify(true);
 const applyDom=()=>{
 const d=dom.value.trim().toLowerCase();
 if(!d){toast(t('e_bad_domain'));return}
-ask(t('dm_confirm',d),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+':'+location.port+'/')},{danger:false})
+ask(t('dm_confirm',d),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+':2080/')},{danger:false})
 };
 let bv=s.cap_basis;
 const basisDd=dd([{v:'total',l:t('basis_total')},{v:'out',l:t('basis_out')}],bv,v=>{bv=v});
@@ -604,7 +578,6 @@ field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'des
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))))),
 panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')))),
 panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
-panel('plug',t('pp_title'),portsBox()),
 panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
