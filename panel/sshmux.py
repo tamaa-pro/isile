@@ -1,6 +1,7 @@
 import asyncio,ipaddress,os,socket,sys,time
 SSH_PORT=int(os.environ.get("SSH_PORT","22"))
 PUB_PORT=int(os.environ.get("MUX_PUBLIC_PORT","80"))
+HTTPS_PORT=int(os.environ.get("MUX_HTTPS_PORT","443"))
 TLS_PORT=int(os.environ.get("MUX_TLS_PORT","10444"))
 WEB_PLAIN=int(os.environ.get("MUX_WEB_PLAIN","10080"))
 WEB_TLS=int(os.environ.get("MUX_WEB_TLS","10443"))
@@ -124,7 +125,7 @@ async def handle(cr,cw,tls):
             sw.write(buf)
         else:
             sr,sw=await asyncio.open_connection("127.0.0.1",WEB_TLS if tls else WEB_PLAIN)
-            sw.write(proxy_header(ip,sport,443 if tls else 80)+buf)
+            sw.write(proxy_header(ip,sport,HTTPS_PORT if tls else PUB_PORT)+buf)
         await sw.drain()
         await asyncio.gather(pipe(cr,sw),pipe(sr,cw))
     except Exception:
