@@ -69,16 +69,18 @@ fi
 d="$(dbget domain)"
 local names
 names="$(dbq "SELECT name FROM accounts WHERE proto='ssh'")"
-systemctl disable --now vpnpanel vpnbridge vpnmux vpnstunnel xray udp-custom >/dev/null 2>&1
-rm -f /etc/systemd/system/vpnpanel.service /etc/systemd/system/vpnbridge.service /etc/systemd/system/vpnmux.service /etc/systemd/system/vpnstunnel.service /etc/systemd/system/xray.service /etc/systemd/system/udp-custom.service
+systemctl disable --now vpnpanel vpnbridge vpnmux vpnstunnel xray udp-custom vpn-udpgw >/dev/null 2>&1
+rm -f /etc/systemd/system/vpnpanel.service /etc/systemd/system/vpnbridge.service /etc/systemd/system/vpnmux.service /etc/systemd/system/vpnstunnel.service /etc/systemd/system/xray.service /etc/systemd/system/udp-custom.service /etc/systemd/system/vpn-udpgw.service /etc/vpnpanel/udpgw.nft
 systemctl daemon-reload
 if [ -d /usr/local/lib/isile/udp-custom ]; then
 up="$(grep -oE '"listen"[^,]*' /usr/local/lib/isile/udp-custom/config.json 2>/dev/null | grep -oE '[0-9]{1,5}' | tail -1)"
 ufw delete allow "${up:-36712}/udp" >/dev/null 2>&1
 fi
 nft delete table inet isile_udpc >/dev/null 2>&1
+nft delete table inet isile_udpgw >/dev/null 2>&1
 rm -rf /usr/local/lib/isile /etc/vpnpanel/udp-custom.info
 userdel udpc >/dev/null 2>&1
+userdel udpgw >/dev/null 2>&1
 groupdel udpc >/dev/null 2>&1
 nft delete table inet vpnacct >/dev/null 2>&1
 for n in $names; do

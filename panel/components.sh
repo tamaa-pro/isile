@@ -205,6 +205,78 @@ local p
 p="$(grep -oE '"listen"[^,]*' "$UDPC_DIR/config.json" 2>/dev/null | grep -oE '[0-9]{1,5}' | tail -1 || true)"
 echo "${p:-$UDPC_PORT}"
 }
+# ---------- udpgw (BadVPN, open source, from the distribution): UDP-over-TCP for clients ----------
+# Listens on 127.0.0.1:7300 TCP only; clients reach it through their SSH tunnel, so no firewall port is needed.
+UDPGW_USER=udpgw
+UDPGW_PORT=7300
+UDPGW_NFT=/etc/vpnpanel/udpgw.nft
+udpgw_setup(){
+local BIN UID_N
+if ! command -v badvpn-udpgw >/dev/null 2>&1; then
+apt-get install -y badvpn >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1; apt-get install -y badvpn >/dev/null 2>&1; } || true
+fi
+BIN="$(command -v badvpn-udpgw || true)"
+if [ -z "$BIN" ]; then echo "Warning: badvpn-udpgw is not available from the package sources, UDP over the tunnel stays off"; return 0; fi
+getent group "$UDPGW_USER" >/dev/null || groupadd -r "$UDPGW_USER"
+id "$UDPGW_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin -g "$UDPGW_USER" "$UDPGW_USER"
+UID_N="$(id -u "$UDPGW_USER")"
+install -d -m755 /etc/vpnpanel
+# udpgw relays clients' UDP to any address, so keep it away from private/internal networks (DNS excepted).
+cat > "$UDPGW_NFT" <<EOT
+table inet isile_udpgw
+delete table inet isile_udpgw
+table inet isile_udpgw {
+ chain out {
+  type filter hook output priority 0; policy accept;
+  meta skuid $UID_N meta l4proto udp th dport 53 accept
+  meta skuid $UID_N ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } counter drop
+  meta skuid $UID_N ip6 daddr { ::1, fc00::/7, fe80::/10 } counter drop
+ }
+}
+EOT
+chmod 644 "$UDPGW_NFT"
+cat > /etc/systemd/system/vpn-udpgw.service <<EOT
+[Unit]
+Description=BadVPN udpgw (UDP over the SSH tunnel, loopback only)
+After=network.target
+[Service]
+User=$UDPGW_USER
+Group=$UDPGW_USER
+ExecStartPre=-+/usr/sbin/nft -f $UDPGW_NFT
+ExecStart=$BIN --listen-addr 127.0.0.1:$UDPGW_PORT --max-clients 1000 --max-connections-for-client 20
+ExecStopPost=-+/usr/sbin/nft delete table inet isile_udpgw
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+[Install]
+WantedBy=multi-user.target
+EOT
+systemctl daemon-reload
+systemctl enable vpn-udpgw >/dev/null 2>&1 || true
+systemctl restart vpn-udpgw >/dev/null 2>&1 || true
+sleep 1
+systemctl is-active --quiet vpn-udpgw && echo "udpgw running on 127.0.0.1:$UDPGW_PORT" || echo "Warning: udpgw did not start (journalctl -u vpn-udpgw)"
+}
+udpgw_remove(){
+systemctl disable --now vpn-udpgw >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/vpn-udpgw.service "$UDPGW_NFT"
+nft delete table inet isile_udpgw >/dev/null 2>&1 || true
+id "$UDPGW_USER" >/dev/null 2>&1 && userdel "$UDPGW_USER" >/dev/null 2>&1 || true
+getent group "$UDPGW_USER" >/dev/null 2>&1 && groupdel "$UDPGW_USER" >/dev/null 2>&1 || true
+}
+
 uninstall_udpcustom(){
 echo "Removing UDP Custom"
 local P
@@ -212,6 +284,7 @@ P="$(udpc_port)"
 systemctl disable --now udp-custom >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/udp-custom.service "$UDPC_INFO"
 nft delete table inet isile_udpc >/dev/null 2>&1 || true
+udpgw_remove
 rm -rf "$UDPC_DIR"
 rmdir /usr/local/lib/isile >/dev/null 2>&1 || true
 if command -v ufw >/dev/null 2>&1; then ufw delete allow "$P/udp" >/dev/null 2>&1 || true; fi
@@ -260,6 +333,7 @@ journalctl -u udp-custom -n 12 --no-pager 2>&1 || true
 uninstall_udpcustom
 die "UDP Custom did not stay running, so it was removed again (see the log lines above)"
 fi
+udpgw_setup || true
 dbset comp_udpcustom 1
 echo "UDP Custom installed and running on UDP port $(udpc_port)"
 }
@@ -268,6 +342,7 @@ refresh_udpcustom(){
 id "$UDPC_USER" >/dev/null 2>&1 || die "user $UDPC_USER is missing"
 udpc_files
 systemctl daemon-reload
+udpgw_setup || true
 }
 
 case "$ACTION:$COMP" in

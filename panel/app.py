@@ -163,6 +163,8 @@ def nft_apply(c):
     L.append(" chain out {")
     L.append("  type filter hook output priority -150; policy accept;")
     L.append("  "+rng+" meta l4proto { tcp, udp } th dport 53 accept")
+    if comp_installed("udpcustom"):
+        L.append("  "+rng+" ip daddr 127.0.0.1 tcp dport 7300 accept")
     L.append("  "+rng+" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } drop")
     L.append("  "+rng+" ip6 daddr { ::1, fc00::/7, fe80::/10 } drop")
     for u in uids:
@@ -305,10 +307,128 @@ def harvest_xray():
         if m:
             out.setdefault(m.group(1),[0,0])[0 if m.group(2)=="uplink" else 1]+=int(s.get("value",0) or 0)
     return out
+# ---- UDP Custom: per-account sessions (from its log) and usage (nft counters per client ip:port) ----
+import ipaddress
+UDPS={}
+UDPEND={}
+UDPS_LOCK=threading.Lock()
+UDP_MAIN=[None]
+UDP_INIT=[False]
+UDP_LAST={}
+RE_USRC=re.compile(r"\[src:([^\]]+)\]")
+RE_UUSER=re.compile(r"\[user:([^\]]+)\]")
+RE_UPID=re.compile(r"udp-custom\[(\d+)\]")
+RE_UNAME=re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+def udp_line(l):
+    s=RE_USRC.search(l)
+    if not s:
+        return
+    src=s.group(1)
+    p=RE_UPID.search(l)
+    pid=p.group(1) if p else ""
+    with UDPS_LOCK:
+        if "Client connected" in l:
+            u=RE_UUSER.search(l)
+            if u and RE_UNAME.match(u.group(1)):
+                UDPS[src]=(u.group(1),pid)
+        elif "Client disconnected" in l:
+            v=UDPS.pop(src,None)
+            if v:
+                UDPEND[src]=v[0]
+def udp_sessions():
+    with UDPS_LOCK:
+        m=UDP_MAIN[0]
+        return [(s,v[0]) for s,v in UDPS.items() if m is None or not v[1] or v[1]==m]
+def udp_follow():
+    while True:
+        try:
+            if comp_installed("udpcustom"):
+                p=subprocess.Popen(["journalctl","-u","udp-custom","-n","3000","-f","-o","short-iso","--no-pager"],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,errors="replace")
+                for l in p.stdout:
+                    udp_line(l)
+                p.wait()
+            else:
+                time.sleep(30)
+        except Exception:
+            traceback.print_exc()
+        time.sleep(5)
+def udp_split(src):
+    h,_,p=src.rpartition(":")
+    h=h.strip("[]")
+    ip=ipaddress.ip_address(h)
+    return ("ip6" if ip.version==6 else "ip"),str(ip),int(p)
+def harvest_udp():
+    out={}
+    if not comp_installed("udpcustom"):
+        return out
+    try:
+        m=sh(["systemctl","show","-p","MainPID","--value","udp-custom"]).stdout.strip()
+        UDP_MAIN[0]=m if m and m!="0" else None
+    except Exception:
+        pass
+    lp=udp_port()
+    if not UDP_INIT[0]:
+        r=sh(["nft","-f","-"],inp="table inet vpnudp\ndelete table inet vpnudp\ntable inet vpnudp {\n chain in { type filter hook input priority -150; policy accept; }\n chain out { type filter hook output priority -150; policy accept; }\n}\n")
+        if r.returncode:
+            return out
+        UDP_INIT[0]=True
+        UDP_LAST.clear()
+    cur=dict(udp_sessions())
+    with UDPS_LOCK:
+        UDPEND.clear()
+    r=sh(["nft","-j","-a","list","table","inet","vpnudp"])
+    if r.returncode:
+        UDP_INIT[0]=False
+        return out
+    have={}
+    try:
+        items=json.loads(r.stdout or "{}").get("nftables",[])
+    except ValueError:
+        items=[]
+    for it in items:
+        ru=it.get("rule")
+        if not ru:
+            continue
+        cm=(ru.get("comment") or "").split("|")
+        if len(cm)!=4 or cm[0]!="udp":
+            continue
+        b=0
+        for e in ru.get("expr",[]):
+            if "counter" in e:
+                b=int(e["counter"].get("bytes",0))
+        have[(cm[2],cm[3])]=(ru.get("handle"),ru.get("chain"),b,cm[1])
+    cmds=[]
+    for key,(h,ch,b,u) in have.items():
+        last=UDP_LAST.get(key,0)
+        d=b-last if b>=last else b
+        UDP_LAST[key]=b
+        if d>0:
+            o=out.setdefault(u,[0,0])
+            o[0 if key[1]=="i" else 1]+=d
+        if key[0] not in cur:
+            cmds.append("delete rule inet vpnudp %s handle %s"%(ch,h))
+            UDP_LAST.pop(key,None)
+    for src,u in cur.items():
+        if (src,"i") in have:
+            continue
+        try:
+            fam,ip,pt=udp_split(src)
+        except ValueError:
+            continue
+        cmds.append('add rule inet vpnudp in %s saddr %s udp sport %d udp dport %d counter comment "udp|%s|%s|i"'%(fam,ip,pt,lp,u,src))
+        cmds.append('add rule inet vpnudp out %s daddr %s udp dport %d udp sport %d counter comment "udp|%s|%s|o"'%(fam,ip,pt,lp,u,src))
+    if cmds:
+        r=sh(["nft","-f","-"],inp="\n".join(cmds)+"\n")
+        if r.returncode:
+            print("nft udp error:",r.stderr,file=sys.stderr)
+    return {k:(v[0],v[1]) for k,v in out.items()}
 def collect(c):
     global SPEED,SP_T
     with LOCK:
         x=harvest_xray()
+        for n,(u,d) in harvest_udp().items():
+            o=x.get(n,(0,0))
+            x[n]=(o[0]+u,o[1]+d)
         s=harvest_nft()
         um={r["uid"]:r["name"] for r in c.execute("SELECT name,uid FROM accounts WHERE uid IS NOT NULL")}
         now=time.time()
@@ -595,6 +715,12 @@ def conn_cycle():
                     sshconn.kill(pid)
         else:
             SSH_OVER.pop(n,None)
+    names={r["name"] for r in rows if r["proto"]=="ssh"}
+    for src,u in udp_sessions():
+        if u in names:
+            e=new.setdefault(u,{"n":0,"ips":[]})
+            e["n"]+=1
+            e["ips"].append(src.rpartition(":")[0].strip("[]"))
     for n in [n for n in SSH_OVER if n not in new]:
         SSH_OVER.pop(n,None)
     CONN=new
@@ -1617,6 +1743,7 @@ def main():
         c.close()
     threading.Thread(target=worker,daemon=True).start()
     threading.Thread(target=conn_worker,daemon=True).start()
+    threading.Thread(target=udp_follow,daemon=True).start()
     from waitress import serve
     serve(app,host="127.0.0.1",port=8000,threads=8)
 if __name__=="__main__":
