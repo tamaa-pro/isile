@@ -146,31 +146,48 @@ cat > "$UDPC_DIR/config.json" <<EOT
 EOT
 fi
 chmod 644 "$UDPC_DIR/config.json"
-# The binary may only answer packets that clients sent first: any NEW outbound connection
-# from its user to anything except loopback (the local sshd) is dropped.
+# Egress firewall: the binary may only answer packets that clients sent first. Any NEW outbound
+# connection from its cgroup to anything except loopback (the local sshd) is dropped.
+# The binary is closed source and verifies the account against the system (sshd/PAM), which
+# needs more than an unprivileged user can do, so it runs as root but confined as below.
+local SP
+SP="$(ssh_port)"
 cat > "$UDPC_DIR/egress.nft" <<EOT
 table inet isile_udpc
 delete table inet isile_udpc
 table inet isile_udpc {
  chain out {
   type filter hook output priority 0; policy accept;
-  meta skuid $UID_N ct state new ip daddr != 127.0.0.0/8 counter drop
-  meta skuid $UID_N ct state new ip6 daddr != ::1 counter drop
+  socket cgroupv2 level 2 "system.slice/udp-custom.service" ct state new ip daddr != 127.0.0.0/8 counter drop
+  socket cgroupv2 level 2 "system.slice/udp-custom.service" ct state new ip6 daddr != ::1 counter drop
  }
 }
 EOT
+if [ "$SP" != "22" ]; then
+# the binary always talks to 127.0.0.1:22; send that to the real sshd port
+cat >> "$UDPC_DIR/egress.nft" <<EOT
+table ip isile_udpc_nat
+delete table ip isile_udpc_nat
+table ip isile_udpc_nat {
+ chain out {
+  type nat hook output priority -100; policy accept;
+  socket cgroupv2 level 2 "system.slice/udp-custom.service" ip daddr 127.0.0.1 tcp dport 22 dnat to 127.0.0.1:$SP
+ }
+}
+EOT
+fi
 chmod 644 "$UDPC_DIR/egress.nft"
 cat > /etc/systemd/system/udp-custom.service <<EOT
 [Unit]
-Description=UDP Custom (third-party closed-source binary, sandboxed)
-After=network.target
+Description=UDP Custom (third-party closed-source binary, confined)
+After=network.target ssh.service sshd.service
 [Service]
-User=$UDPC_USER
-Group=$UDPC_USER
+User=root
 WorkingDirectory=$UDPC_DIR
-ExecStartPre=+/usr/sbin/nft -f $UDPC_DIR/egress.nft
+ExecStartPre=-+/usr/sbin/nft -f $UDPC_DIR/egress.nft
 ExecStart=$UDPC_DIR/udp-custom server
 ExecStopPost=-+/usr/sbin/nft delete table inet isile_udpc
+ExecStopPost=-+/usr/sbin/nft delete table ip isile_udpc_nat
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
@@ -178,16 +195,15 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=true
 RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
-CapabilityBoundingSet=
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_NET_BIND_SERVICE CAP_AUDIT_WRITE
 [Install]
 WantedBy=multi-user.target
 EOT
