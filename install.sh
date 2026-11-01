@@ -48,6 +48,8 @@ if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
 [ "$ID" = "ubuntu" ] || die "Ubuntu only (found: $ID)"
 OLDV="$(cat "$APP/panel/VERSION" 2>/dev/null || echo none)"
 UDPC=no
+VAYDNS=no
+VAYDNS_DOM=""
 WANT_XRAY=1
 WANT_WS=1
 if [ "$MODE" = install ]; then
@@ -102,6 +104,34 @@ fi
 if [ "$UDPC" = yes ] && [ "$(uname -m)" != x86_64 ] && [ -z "${UDPC_URL:-}" ]; then
 echo "UDP Custom has no default binary for $(uname -m), skipping it (set UDPC_URL to use your own)."
 UDPC=no
+fi
+if [ "${ISILE_VAYDNS:-}" = yes ]; then
+VAYDNS=yes
+elif [ -z "${ISILE_VAYDNS:-}" ]; then
+echo
+echo "=================================================="
+echo "  Optional: VayDNS (SSH and V2Ray over a DNS tunnel)"
+echo "=================================================="
+echo " Open source (net2share/vaydns), downloaded from its GitHub release and verified"
+echo " against the SHA-256 published with it. It needs a tunnel domain whose NS record"
+echo " points at this server, and UDP port 53 open in the cloud firewall."
+echo " You can also install or remove it later from the panel: Settings > Components."
+read -rp "Install VayDNS together with the other services? [y/N]: " YN </dev/tty
+if [[ "$YN" =~ ^[Yy]$ ]]; then VAYDNS=yes; fi
+fi
+if [ "$VAYDNS" = yes ]; then
+case "$(uname -m)" in x86_64|aarch64) ;; *) echo "VayDNS has no binary for $(uname -m), skipping it."; VAYDNS=no;; esac
+fi
+if [ "$VAYDNS" = yes ]; then
+VAYDNS_DOM="${ISILE_VAYDNS_DOMAIN:-}"
+if [ -z "$VAYDNS_DOM" ] && [ -z "${ISILE_VAYDNS:-}" ]; then
+read -rp "VayDNS tunnel domain (e.g. t.example.com, Enter to set it later in the panel): " VAYDNS_DOM </dev/tty
+fi
+VAYDNS_DOM="$(echo "$VAYDNS_DOM" | tr 'A-Z' 'a-z' | tr -d ' ')"
+if [ -n "$VAYDNS_DOM" ]; then
+[[ "$VAYDNS_DOM" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid tunnel domain: $VAYDNS_DOM"
+[ "$VAYDNS_DOM" != "$DOMAIN" ] || die "the VayDNS tunnel domain must be different from the panel domain"
+fi
 fi
 else
 STEP="reading current settings"
@@ -304,6 +334,15 @@ fi
 elif [ -x /usr/local/lib/isile/udp-custom/udp-custom ]; then
 bash "$APP/panel/components.sh" refresh udpcustom >>"$LOG" 2>&1 || echo "Warning: could not refresh the UDP Custom service files (see $LOG)"
 fi
+if [ "$VAYDNS" = yes ]; then
+STEP="installing VayDNS"
+echo "Installing VayDNS (optional)"
+if ! VAYDNS_DOMAIN="$VAYDNS_DOM" bash "$APP/panel/components.sh" install vaydns >>"$LOG" 2>&1; then
+echo "Warning: VayDNS could not be installed (see $LOG). Continuing without it."
+fi
+elif [ -x /usr/local/lib/isile/vaydns/vaydns-server ]; then
+bash "$APP/panel/components.sh" refresh vaydns >>"$LOG" 2>&1 || echo "Warning: could not refresh the VayDNS service files (see $LOG)"
+fi
 STEP="starting services and firewall"
 echo "[8/8] Starting services"
 L ufw allow "$SSH_PORT/tcp"
@@ -323,6 +362,7 @@ if [ -f /etc/systemd/system/xray.service ]; then L systemctl restart xray; fi
 L systemctl restart nginx
 L systemctl restart vpnmux
 if [ -f /etc/systemd/system/udp-custom.service ]; then L systemctl try-restart udp-custom; fi
+if [ -f /etc/systemd/system/vaydns.service ]; then L systemctl try-restart vaydns; fi
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 L systemctl enable vpnstunnel
 L systemctl restart vpnstunnel
@@ -335,7 +375,9 @@ SVCS="$("$APP/venv/bin/python" "$APP/panel/app.py" svcs 2>>"$LOG" || true)"
 [ -n "$SVCS" ] || SVCS="vpnpanel vpnmux nginx"
 UDPON=no
 case " $SVCS " in *" udp-custom "*) UDPON=yes;; esac
-SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /')"
+VAYON=no
+case " $SVCS " in *" vaydns "*) VAYON=yes;; esac
+SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /; s/ vaydns / /')"
 for s in $SVCS; do
 ok=0
 for i in $(seq 1 20); do
@@ -350,6 +392,10 @@ done
 if [ "$UDPON" = yes ] && ! systemctl is-active --quiet udp-custom; then
 journalctl -u udp-custom -n 12 --no-pager >>"$LOG" 2>&1 || true
 echo "Warning: UDP Custom is not running (optional component, see $LOG). You can remove it from Settings > Components."
+fi
+if [ "$VAYON" = yes ] && ! systemctl is-active --quiet vaydns; then
+journalctl -u vaydns -n 12 --no-pager >>"$LOG" 2>&1 || true
+echo "Warning: VayDNS is not running (optional component, see $LOG). You can remove it from Settings > Components."
 fi
 STEP="verifying connection paths"
 CODE=000
@@ -376,6 +422,8 @@ fi
 fi
 SSHB="$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/80; head -c 4 <&3' 2>/dev/null || true)"
 [ "$SSHB" = "SSH-" ] || echo "Warning: direct SSH on port 80 did not answer, SSH SSL without TLS may not work (see $LOG)"
+SSHB="$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/10053; head -c 4 <&3' 2>/dev/null || true)"
+[ "$SSHB" = "SSH-" ] || echo "Warning: direct SSH on the VayDNS upstream (127.0.0.1:10053) did not answer, SSH over VayDNS may not work (see $LOG)"
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 SSHB="$( (sleep 4) | timeout 10 openssl s_client -quiet -connect 127.0.0.1:443 -servername "$DOMAIN" 2>/dev/null | head -c 4 || true)"
 [ "$SSHB" = "SSH-" ] || echo "Warning: direct SSH over TLS on port 443 did not answer, SSH SSL with TLS may not work (see $LOG)"
@@ -417,6 +465,13 @@ fi
 if systemctl is-active --quiet udp-custom; then
 echo " UDP Custom is running: also open its UDP port (default 36712) in the cloud firewall."
 echo " It can be removed any time from Settings > Components in the panel."
+fi
+if [ -f /etc/systemd/system/vaydns.service ]; then
+if [ -s /etc/vpnpanel/vaydns.env ]; then
+echo " VayDNS is installed: open UDP 53 in the cloud firewall and make sure the NS record of your tunnel domain points at this server."
+else
+echo " VayDNS is installed but has no tunnel domain yet: set it in Settings > Components, then add its NS record and open UDP 53."
+fi
 fi
 echo " Type  isile  to open the management menu:"
 echo "   1) Edit admin credentials"
