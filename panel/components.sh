@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom>
+# Usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom|vaydns>
 # Output goes to stdout/stderr: the caller (install.sh or the panel job) redirects it to the log.
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -10,6 +10,15 @@ UDPC_USER=udpc
 UDPC_INFO=/etc/vpnpanel/udp-custom.info
 UDPC_PORT=36712
 UDPC_URL_AMD64="https://github.com/http-custom/udp-custom/raw/main/bin/udp-custom-linux-amd64"
+VAYDNS_DIR=/usr/local/lib/isile/vaydns
+VAYDNS_USER=vaydns
+VAYDNS_ENV=/etc/vpnpanel/vaydns.env
+VAYDNS_INFO=/etc/vpnpanel/vaydns.info
+VAYDNS_BASE="https://github.com/net2share/vaydns/releases/latest/download"
+VAYDNS_URL="${VAYDNS_URL:-}"
+VAYDNS_SHA256="$(echo "${VAYDNS_SHA256:-}" | tr 'A-F' 'a-f' | tr -d ' ')"
+VAYDNS_UDP=5300
+VAYDNS_UPSTREAM=10053
 UDPC_URL="${UDPC_URL:-}"
 UDPC_SHA256="$(echo "${UDPC_SHA256:-}" | tr 'A-F' 'a-f' | tr -d ' ')"
 ACTION="${1:-}"
@@ -345,6 +354,123 @@ systemctl daemon-reload
 udpgw_setup || true
 }
 
+# ---------- VayDNS (open source DNS tunnel, net2share/vaydns) ----------
+# The server listens on UDP 5300 as an unprivileged user; an nftables rule redirects incoming UDP 53 to it
+# (so systemd-resolved can keep its own loopback listener). Everything the tunnel carries is forwarded to the
+# local multiplexer (127.0.0.1:10053), which sends SSH to sshd, TLS to stunnel and HTTP to nginx.
+vaydns_files(){
+install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
+cat > "$VAYDNS_DIR/redirect.nft" <<EOT
+table inet isile_vaydns
+delete table inet isile_vaydns
+table inet isile_vaydns {
+ chain pre {
+  type nat hook prerouting priority dstnat; policy accept;
+  iifname != "lo" udp dport 53 redirect to :$VAYDNS_UDP
+ }
+}
+EOT
+chmod 644 "$VAYDNS_DIR/redirect.nft"
+cat > /etc/systemd/system/vaydns.service <<EOT
+[Unit]
+Description=VayDNS server (DNS tunnel)
+After=network.target vpnmux.service
+ConditionPathExists=$VAYDNS_ENV
+[Service]
+User=$VAYDNS_USER
+Group=$VAYDNS_USER
+EnvironmentFile=$VAYDNS_ENV
+ExecStartPre=-+/usr/sbin/nft -f $VAYDNS_DIR/redirect.nft
+ExecStart=$VAYDNS_DIR/vaydns-server -udp :$VAYDNS_UDP -privkey-file $VAYDNS_DIR/server.key -domain \${VAYDNS_DOMAIN} -upstream 127.0.0.1:$VAYDNS_UPSTREAM
+ExecStopPost=-+/usr/sbin/nft delete table inet isile_vaydns
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+[Install]
+WantedBy=multi-user.target
+EOT
+}
+install_vaydns(){
+echo "Installing VayDNS (DNS tunnel)"
+local ARCH URL TMP SHA EXP
+case "$(uname -m)" in x86_64) ARCH=amd64;; aarch64) ARCH=arm64;; *) die "unsupported architecture $(uname -m)";; esac
+URL="$VAYDNS_URL"
+[ -n "$URL" ] || URL="$VAYDNS_BASE/vaydns-server-linux-$ARCH"
+[[ "$URL" =~ ^https:// ]] || die "VAYDNS_URL must be an https:// address"
+TMP="$(mktemp -d)"
+echo "Source: $URL"
+curl -fsSL --max-time 180 -o "$TMP/vaydns" "$URL" || { rm -rf "$TMP"; die "cannot download VayDNS from $URL"; }
+[ "$(head -c4 "$TMP/vaydns" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || { rm -rf "$TMP"; die "the downloaded file is not a Linux executable"; }
+SHA="$(sha256sum "$TMP/vaydns" | cut -d' ' -f1)"
+echo "SHA-256: $SHA"
+EXP="$VAYDNS_SHA256"
+if [ -z "$EXP" ] && [ -z "$VAYDNS_URL" ]; then
+curl -fsSL --max-time 30 -o "$TMP/vaydns.sha256" "$URL.sha256" || { rm -rf "$TMP"; die "cannot download the VayDNS checksum"; }
+EXP="$(grep -oE '[0-9a-fA-F]{64}' "$TMP/vaydns.sha256" | head -1 | tr 'A-F' 'a-f' || true)"
+[ -n "$EXP" ] || { rm -rf "$TMP"; die "the VayDNS checksum file is invalid"; }
+fi
+if [ -n "$EXP" ] && [ "$EXP" != "$SHA" ]; then rm -rf "$TMP"; die "VayDNS SHA-256 mismatch (expected $EXP)"; fi
+if [ -z "$EXP" ]; then echo "Note: no VAYDNS_SHA256 was supplied, so the binary could not be verified against a known hash"; fi
+getent group "$VAYDNS_USER" >/dev/null || groupadd -r "$VAYDNS_USER"
+id "$VAYDNS_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin -g "$VAYDNS_USER" "$VAYDNS_USER"
+install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
+install -m755 "$TMP/vaydns" "$VAYDNS_DIR/vaydns-server"
+rm -rf "$TMP"
+if [ ! -s "$VAYDNS_DIR/server.key" ] || [ ! -s "$VAYDNS_DIR/server.pub" ]; then
+rm -f "$VAYDNS_DIR/server.key" "$VAYDNS_DIR/server.pub"
+"$VAYDNS_DIR/vaydns-server" -gen-key -privkey-file "$VAYDNS_DIR/server.key" -pubkey-file "$VAYDNS_DIR/server.pub" >/dev/null || die "VayDNS key generation failed"
+[ -s "$VAYDNS_DIR/server.key" ] && [ -s "$VAYDNS_DIR/server.pub" ] || die "VayDNS did not write its key files"
+fi
+chown "$VAYDNS_USER:$VAYDNS_USER" "$VAYDNS_DIR/server.key"
+chmod 600 "$VAYDNS_DIR/server.key"
+chmod 644 "$VAYDNS_DIR/server.pub"
+printf 'url=%s\nsha256=%s\n' "$URL" "$SHA" > "$VAYDNS_INFO"
+chmod 644 "$VAYDNS_INFO"
+vaydns_files
+if command -v ufw >/dev/null 2>&1; then ufw allow 53/udp || true; ufw allow "$VAYDNS_UDP/udp" || true; fi
+systemctl daemon-reload
+systemctl enable vaydns >/dev/null 2>&1 || true
+dbset comp_vaydns 1
+if [ -n "${VAYDNS_DOMAIN:-}" ]; then
+[[ "$VAYDNS_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid VayDNS tunnel domain: $VAYDNS_DOMAIN"
+dbset vaydns_domain "$VAYDNS_DOMAIN"
+fi
+echo "VayDNS installed. Set the tunnel domain in Settings > Components, then add its NS record; UDP 53 must be open."
+}
+uninstall_vaydns(){
+echo "Removing VayDNS"
+systemctl disable --now vaydns >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/vaydns.service "$VAYDNS_ENV" "$VAYDNS_INFO"
+nft delete table inet isile_vaydns >/dev/null 2>&1 || true
+if command -v ufw >/dev/null 2>&1; then ufw delete allow 53/udp >/dev/null 2>&1 || true; ufw delete allow "$VAYDNS_UDP/udp" >/dev/null 2>&1 || true; fi
+rm -rf "$VAYDNS_DIR"
+rmdir /usr/local/lib/isile >/dev/null 2>&1 || true
+id "$VAYDNS_USER" >/dev/null 2>&1 && userdel "$VAYDNS_USER" >/dev/null 2>&1 || true
+getent group "$VAYDNS_USER" >/dev/null 2>&1 && groupdel "$VAYDNS_USER" >/dev/null 2>&1 || true
+systemctl daemon-reload
+dbset comp_vaydns 0
+echo "VayDNS removed"
+}
+refresh_vaydns(){
+[ -x "$VAYDNS_DIR/vaydns-server" ] || return 0
+id "$VAYDNS_USER" >/dev/null 2>&1 || die "user $VAYDNS_USER is missing"
+vaydns_files
+systemctl daemon-reload
+}
+
 case "$ACTION:$COMP" in
 install:xray) install_xray;;
 uninstall:xray) uninstall_xray;;
@@ -353,5 +479,8 @@ uninstall:wsbridge) uninstall_wsbridge;;
 install:udpcustom) install_udpcustom;;
 uninstall:udpcustom) uninstall_udpcustom;;
 refresh:udpcustom) refresh_udpcustom;;
-*) die "usage: components.sh <install|uninstall> <xray|wsbridge|udpcustom>";;
+install:vaydns) install_vaydns;;
+uninstall:vaydns) uninstall_vaydns;;
+refresh:vaydns) refresh_vaydns;;
+*) die "usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom|vaydns>";;
 esac

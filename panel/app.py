@@ -17,7 +17,7 @@ LOGF="/var/log/isile-install.log"
 BANNER_TXT="/etc/vpnpanel/banner.txt"
 BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
 BANNER_MAX=2000
-LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"])}
+LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"])}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -27,7 +27,7 @@ GB=1073741824
 V2=("vless","vmess","trojan")
 PROTOS=("ssh",)+V2
 MODES=("tls","plain")
-TRANSPORTS=("ws","ssl","udp","grpc")
+TRANSPORTS=("ws","ssl","udp","grpc","dns")
 V2NETS=("ws","grpc")
 UNITDIR="/etc/systemd/system"
 UDPC_DIR="/usr/local/lib/isile/udp-custom"
@@ -35,9 +35,18 @@ UDPC_BIN=UDPC_DIR+"/udp-custom"
 UDPC_CONF=UDPC_DIR+"/config.json"
 UDPC_INFO="/etc/vpnpanel/udp-custom.info"
 UDPC_PORT=36712
-COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"))
-COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray"}
-REMOVABLE=("wsbridge","udpcustom","xray")
+VAYDNS_DIR="/usr/local/lib/isile/vaydns"
+VAYDNS_BIN=VAYDNS_DIR+"/vaydns-server"
+VAYDNS_PUB=VAYDNS_DIR+"/server.pub"
+VAYDNS_ENV="/etc/vpnpanel/vaydns.env"
+VAYDNS_INFO="/etc/vpnpanel/vaydns.info"
+VAYDNS_PORT=53
+VAYDNS_UDP=5300
+VAYDNS_LOCAL=7000
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","tls","vaydns"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"))
+COMBO_REQ={"vlessdns":"xray","vmessdns":"xray","trojandns":"xray"}
+COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns"}
+REMOVABLE=("wsbridge","udpcustom","xray","vaydns")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
 GPORTS={("vless","tls"):10101,("trojan","tls"):10102,("vmess","tls"):10103,("vless","plain"):10111,("trojan","plain"):10112,("vmess","plain"):10113}
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
@@ -207,6 +216,8 @@ def comp_installed(c):
         return unit_exists("udp-custom") and os.path.exists(UDPC_BIN)
     if c=="wsbridge":
         return unit_exists("vpnbridge")
+    if c=="vaydns":
+        return unit_exists("vaydns") and os.path.exists(VAYDNS_BIN)
     return True
 def combos_off():
     return {x for x in get("combos_off","").split(",") if x}
@@ -214,7 +225,10 @@ def comp_combos(c):
     return [p+":"+m for p,m,k in COMBOS if k==c]
 def comp_enabled(c,off=None):
     off=combos_off() if off is None else off
-    return any(k not in off for k in comp_combos(c))
+    ks=comp_combos(c)
+    if c=="xray" and comp_installed("vaydns"):
+        ks=ks+[p+":"+m for p,m,k in COMBOS if p in COMBO_REQ]
+    return any(k not in off for k in ks)
 def comp_on(c):
     return comp_installed(c) and comp_enabled(c)
 def svc_active(u):
@@ -245,29 +259,87 @@ def udpc_info():
     except OSError:
         return None
     return o or None
+def vaydns_domain():
+    return get("vaydns_domain","")
+def vaydns_pub():
+    try:
+        with open(VAYDNS_PUB) as f:
+            v=f.read().strip()
+        return v if re.match(r"^[A-Za-z0-9+/=_-]{16,200}$",v) else ""
+    except OSError:
+        return ""
+def vaydns_info():
+    o={}
+    try:
+        with open(VAYDNS_INFO) as f:
+            for l in f:
+                k,_,v=l.partition("=")
+                if k in ("url","sha256"):
+                    o[k]=v.strip()
+    except OSError:
+        return None
+    return o or None
+def vaydns_env_write():
+    d=vaydns_domain()
+    try:
+        if d:
+            txt="VAYDNS_DOMAIN=%s\n"%d
+            try:
+                with open(VAYDNS_ENV) as f:
+                    if f.read()==txt:
+                        return False
+            except OSError:
+                pass
+            os.makedirs(os.path.dirname(VAYDNS_ENV),exist_ok=True)
+            tmp=VAYDNS_ENV+".tmp"
+            with open(tmp,"w") as f:
+                f.write(txt)
+            os.chmod(tmp,0o644)
+            os.replace(tmp,VAYDNS_ENV)
+            return True
+        if os.path.exists(VAYDNS_ENV):
+            os.unlink(VAYDNS_ENV)
+            return True
+    except OSError:
+        traceback.print_exc()
+    return False
+def vaydns_sync(off=None):
+    if not comp_installed("vaydns"):
+        return
+    ch=vaydns_env_write()
+    if comp_enabled("vaydns",off) and vaydns_domain():
+        if not svc_active("vaydns"):
+            sh(["systemctl","enable","--now","vaydns"])
+        elif ch:
+            sh(["systemctl","restart","vaydns"])
+    else:
+        sh(["systemctl","disable","--now","vaydns"])
 def combo_info(off=None):
     off=combos_off() if off is None else off
     t=tls_on()
+    tdom=vaydns_domain()
     inst={c:comp_installed(c) for c in COMP_UNIT}
     out=[]
     for p,m,c in COMBOS:
         k=p+":"+m
         why=""
-        if not inst[c]:
+        if not inst[c] or (p in COMBO_REQ and not inst[COMBO_REQ[p]]):
             why="not_installed"
         elif k in off:
             why="disabled"
         elif m=="tls" and not t:
             why="no_tls"
+        elif c=="vaydns" and not tdom:
+            why="no_domain"
         out.append({"k":k,"p":p,"m":m,"c":c,"enabled":k not in off,"installed":inst[c],"avail":not why,"why":why})
     return out
 def acct_keys(proto,transport,tls):
     if proto=="ssh":
         if transport=="udp":
             return ["sshudp:udp"]
-        base="sshws" if transport=="ws" else "sshssl"
+        base="sshws" if transport=="ws" else "sshdns" if transport=="dns" else "sshssl"
     else:
-        base=proto
+        base=proto+"dns" if transport=="dns" else proto
     return [base+":"+m for m in (MODES if tls=="both" else (tls,))]
 def keys_denied(keys):
     off=combos_off()
@@ -276,6 +348,10 @@ def keys_denied(keys):
         c=cm.get(k)
         if not c or not comp_installed(c) or k in off:
             return k
+        if c=="vaydns":
+            b=k.split(":")[0]
+            if not vaydns_domain() or (b in COMBO_REQ and not comp_installed(COMBO_REQ[b])):
+                return k
     return ""
 def expected_units():
     u=["vpnpanel","nginx","vpnmux"]
@@ -285,6 +361,8 @@ def expected_units():
         u.append("xray")
     if comp_on("udpcustom"):
         u.append("udp-custom")
+    if comp_on("vaydns") and vaydns_domain():
+        u.append("vaydns")
     try:
         if os.path.getsize("/etc/vpnpanel/stunnel.conf")>0:
             u.append("vpnstunnel")
@@ -637,6 +715,7 @@ def apply_components(c):
                     sh(["systemctl","enable","--now",u])
             else:
                 sh(["systemctl","disable","--now",u])
+        vaydns_sync(off)
         if comp_installed("xray"):
             if comp_enabled("xray",off):
                 sh(["systemctl","enable","xray"])
@@ -980,6 +1059,8 @@ def ports_info():
     rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",2080,True,ls)]
     if comp_installed("udpcustom"):
         rows.append(("udp",udp_port(),comp_on("udpcustom"),listening_udp()))
+    if comp_installed("vaydns"):
+        rows.append(("dns",VAYDNS_PORT,comp_on("vaydns") and bool(vaydns_domain()),{VAYDNS_PORT} if VAYDNS_UDP in listening_udp() else set()))
     return [{"k":k,"port":p,"enabled":en,"listening":en and p in l} for k,p,en,l in rows]
 @app.get("/api/stats")
 @auth
@@ -998,6 +1079,7 @@ def stats():
     sv["ssh"]="ok" if any(svc_active(s) for s in ("ssh","ssh.socket")) else "warn"
     sv["panel"]="ok"
     sv["udp-custom"]=block_state("udpcustom",off)
+    sv["vaydns"]=block_state("vaydns",off)
     with open("/proc/uptime") as f:
         up=float(f.read().split()[0])
     rx,tx=net_totals()
@@ -1133,8 +1215,8 @@ def log_sources():
         elif k=="stunnel":
             if os.path.exists("/etc/vpnpanel/stunnel.conf") and os.path.getsize("/etc/vpnpanel/stunnel.conf")>0:
                 out.append({"id":k,"kind":"unit"})
-        elif k=="udpcustom":
-            if comp_installed("udpcustom"):
+        elif k in ("udpcustom","vaydns"):
+            if comp_installed(k):
                 out.append({"id":k,"kind":"unit"})
         else:
             out.append({"id":k,"kind":"unit"})
@@ -1235,6 +1317,8 @@ def domain_set():
         return err("bad_domain")
     if email and not EMAIL_RE.match(email):
         return err("bad_email")
+    if dom==vaydns_domain():
+        return err("domain_same")
     e=start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email)))
     if e:
         return err("system",500,e)
@@ -1256,7 +1340,7 @@ def latest_version():
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
-    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom")) if comp_on(c)]+["nginx","vpnmux"]
+    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom"),("vaydns","vaydns")) if comp_on(c) and (c!="vaydns" or vaydns_domain())]+["nginx","vpnmux"]
     e=start_job("restart","sleep 1; systemctl restart %s; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel"%" ".join(us))
     if e:
         return err("system",500,e)
@@ -1344,7 +1428,7 @@ def job_busy():
     except (OSError,ValueError):
         return False
 def comp_accounts(c,comp):
-    q={"xray":"proto IN ('vless','vmess','trojan')","wsbridge":"proto='ssh' AND transport='ws'","udpcustom":"proto='ssh' AND transport='udp'"}.get(comp)
+    q={"xray":"proto IN ('vless','vmess','trojan')","wsbridge":"proto='ssh' AND transport='ws'","udpcustom":"proto='ssh' AND transport='udp'","vaydns":"transport='dns'"}.get(comp)
     if not q:
         return 0
     return c.execute("SELECT COUNT(*) n FROM accounts WHERE "+q).fetchone()["n"]
@@ -1360,6 +1444,12 @@ def comps_get():
             if k=="udpcustom":
                 o["port"]=udp_port()
                 o["info"]=udpc_info()
+            if k=="vaydns":
+                o["domain"]=vaydns_domain()
+                o["pubkey"]=vaydns_pub()
+                o["port"]=VAYDNS_PORT
+                o["server_ip"]=get("server_ip","")
+                o["info"]=vaydns_info()
             comps[k]=o
     finally:
         c.close()
@@ -1384,6 +1474,25 @@ def combo_set():
         finally:
             c.close()
     return jsonify(ok=True)
+@app.post("/api/vaydns/config")
+@auth
+def vaydns_config():
+    d=request.get_json(silent=True) or {}
+    dom=str(d.get("domain","")).strip().lower()
+    if dom and not DOMAIN_RE.match(dom):
+        return err("bad_domain")
+    if dom and dom==get("domain",""):
+        return err("domain_same")
+    if not comp_installed("vaydns"):
+        return err("not_found",404)
+    with LOCK:
+        put("vaydns_domain",dom)
+        c=db()
+        try:
+            apply_components(c)
+        finally:
+            c.close()
+    return jsonify(ok=True)
 @app.post("/api/components/<comp>/<action>")
 @auth
 def comp_action(comp,action):
@@ -1400,7 +1509,7 @@ def comp_action(comp,action):
         off=combos_off()-set(comp_combos(comp))
         put("combos_off",",".join(sorted(off)))
     cmd=": > %s; bash %s/components.sh %s %s >>%s 2>&1"%(shq(LOGF),shq(BASE),action,comp,shq(LOGF))
-    if comp=="xray" and action=="install":
+    if comp in ("xray","vaydns") and action=="install":
         cmd+=" && systemctl restart vpnpanel"
     e=start_job("component",cmd)
     if e:
@@ -1421,8 +1530,13 @@ def lst():
         rows.append(o)
     c.close()
     return jsonify(rows)
-def vmess_link(n,s,dom,tls,grpc=False):
-    o={"v":"2","ps":n+("-TLS" if tls else "-80"),"add":dom,"port":"443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"grpc" if grpc else "ws","type":"gun" if grpc else "none","host":"" if grpc else dom,"path":"vmess-grpc" if grpc else "/vmess","tls":"tls" if tls else "","sni":dom if tls else "","alpn":"h2" if grpc and tls else ""}
+def dns_head():
+    td=vaydns_domain()
+    pub=vaydns_pub()
+    ip=get("server_ip","") or host()
+    return [{"k":"dns_domain","value":td or "-","rows":1},{"k":"dns_pubkey","value":pub or "-","rows":2},{"k":"dns_cmd","value":"vaydns-client -udp %s:%d -pubkey %s -domain %s -listen 127.0.0.1:%d"%(ip,VAYDNS_PORT,pub or "PUBKEY",td or "DOMAIN",VAYDNS_LOCAL),"rows":4}]
+def vmess_link(n,s,dom,tls,grpc=False,dns=False):
+    o={"v":"2","ps":n+("-DNS" if dns else "")+("-TLS" if tls else "-80"),"add":"127.0.0.1" if dns else dom,"port":str(VAYDNS_LOCAL) if dns else "443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"grpc" if grpc else "ws","type":"gun" if grpc else "none","host":"" if grpc else dom,"path":"vmess-grpc" if grpc else "/vmess","tls":"tls" if tls else "","sni":dom if tls else "","alpn":"h2" if grpc and tls else ""}
     return "vmess://"+base64.b64encode(json.dumps(o,separators=(",",":")).encode()).decode()
 @app.get("/api/accounts/<name>/info")
 @auth
@@ -1442,6 +1556,17 @@ def info(name):
     if p=="ssh" and r["transport"]=="udp":
         up=udp_port()
         items=[{"k":"udp_addr","value":"%s:%d@%s:%s"%(dom,up,n,s),"rows":2},{"k":"udp_port","value":str(up),"rows":1},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+    elif p=="ssh" and r["transport"]=="dns":
+        items=dns_head()
+        want_tls=t_on and r["tls"] in ("tls","both")
+        ad="127.0.0.1:%d@%s:%s"%(VAYDNS_LOCAL,n,s)
+        if want_tls:
+            items.append({"k":"dns_ssh_tls","value":ad,"rows":2})
+        if r["tls"] in ("plain","both"):
+            items.append({"k":"dns_ssh_plain","value":ad,"rows":2})
+        if want_tls:
+            items.append({"k":"sni","value":dom,"rows":1})
+        items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="ssl":
         want_tls=t_on and r["tls"] in ("tls","both")
         if want_tls:
@@ -1458,24 +1583,29 @@ def info(name):
         if t_on and r["tls"] in ("tls","both"):
             items.insert(0,{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
     else:
+        dns=r["transport"]=="dns"
+        if dns:
+            items=dns_head()
         for m in (MODES if r["tls"]=="both" else (r["tls"],)):
             tls=m=="tls"
             if tls and not t_on:
                 continue
             grpc=r["transport"]=="grpc"
-            tail=h+("-TLS" if tls else "-80")
+            tail=h+("-DNS" if dns else "")+("-TLS" if tls else "-80")
+            addr="127.0.0.1" if dns else dom
+            port=VAYDNS_LOCAL if dns else 443 if tls else 80
             sec="sni=%s&fp=chrome&%s"%(dom,"alpn=h2&" if grpc else "") if tls else ""
             if grpc:
                 net="type=grpc&serviceName=%s-grpc&mode=gun"%p
             else:
                 net="type=ws&host=%s&path=%%2F%s"%(dom,p)
             if p=="vmess":
-                v=vmess_link(n,s,dom,tls,grpc)
+                v=vmess_link(n,s,dom,tls,grpc,dns)
             elif p=="vless":
-                v="vless://%s@%s:%d?encryption=none&security=%s&%s%s#%s"%(s,dom,443 if tls else 80,"tls" if tls else "none",sec,net,tail)
+                v="vless://%s@%s:%d?encryption=none&security=%s&%s%s#%s"%(s,addr,port,"tls" if tls else "none",sec,net,tail)
             else:
-                v="trojan://%s@%s:%d?security=%s&%s%s#%s"%(quote(s,safe=""),dom,443 if tls else 80,"tls" if tls else "none",sec,net,tail)
-            items.append({"k":"link_tls" if tls else "link_plain","value":v,"rows":4})
+                v="trojan://%s@%s:%d?security=%s&%s%s#%s"%(quote(s,safe=""),addr,port,"tls" if tls else "none",sec,net,tail)
+            items.append({"k":("dns_link_" if dns else "link_")+("tls" if tls else "plain"),"value":v,"rows":4})
         items.append({"k":"pass" if p=="trojan" else "uuid","value":s,"rows":1})
         if r["transport"]=="grpc":
             items.append({"k":"grpc_service","value":p+"-grpc","rows":1})
@@ -1484,7 +1614,7 @@ def info(name):
     cn=CONN.get(n,{})
     act=r["status"]=="active" and (cn.get("n",0)>0 or time.time()-ACTIVE.get(n,0)<ACTIVE_TTL)
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"])
+    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"],dns_ok=bool(vaydns_domain() and vaydns_pub()))
 def parse_common(d,creating):
     try:
         out={}
@@ -1538,7 +1668,7 @@ def create():
     if transport not in TRANSPORTS:
         return err("bad_values")
     if proto!="ssh":
-        transport="grpc" if transport=="grpc" else "ws"
+        transport=transport if transport in ("grpc","dns") else "ws"
     elif transport=="grpc":
         return err("bad_values")
     if transport=="udp":
@@ -1620,7 +1750,7 @@ def edit(name):
                     return err("bad_values")
                 sets["tls"]=d["tls"]
             if d.get("transport"):
-                okt=V2NETS if r["proto"]!="ssh" else ("ws","ssl","udp")
+                okt=V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","udp","dns")
                 if d["transport"] not in okt:
                     return err("bad_values")
                 sets["transport"]=d["transport"]

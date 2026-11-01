@@ -6,6 +6,9 @@ WEB_PLAIN=int(os.environ.get("MUX_WEB_PLAIN","10080"))
 WEB_TLS=int(os.environ.get("MUX_WEB_TLS","10443"))
 WEB_PLAIN_H2=int(os.environ.get("MUX_WEB_PLAIN_H2","10081"))
 WEB_TLS_H2=int(os.environ.get("MUX_WEB_TLS_H2","10442"))
+DNS_PORT=int(os.environ.get("MUX_DNS_PORT","10053"))
+DNS_TLS_FRONT=int(os.environ.get("MUX_DNS_TLS_FRONT","443"))
+LOCAL=("-","127.0.0.1","::1")
 SNIFF=float(os.environ.get("MUX_SNIFF","2"))
 MAXC=150
 BAN={}
@@ -91,7 +94,7 @@ async def pipe(r,w):
             w.close()
     except Exception:
         pass
-async def handle(cr,cw,tls):
+async def handle(cr,cw,tls,dns=False):
     ip="-"
     sw=None
     ssh=False
@@ -104,7 +107,9 @@ async def handle(cr,cw,tls):
                 sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
             except OSError:
                 pass
-        if tls:
+        if dns:
+            ip,sport="-",0
+        elif tls:
             line=await asyncio.wait_for(cr.readuntil(b"\r\n"),5)
             if len(line)>107:
                 return
@@ -117,12 +122,16 @@ async def handle(cr,cw,tls):
             return
         ssh=buf.startswith(b"SSH-") or (timed and b"SSH-".startswith(buf))
         if ssh:
-            if banned(ip) or CONN.get(ip,0)>=MAXC:
-                return
-            CONN[ip]=CONN.get(ip,0)+1
-            counted=True
-            t0=time.time()
+            if ip not in LOCAL:
+                if banned(ip) or CONN.get(ip,0)>=MAXC:
+                    return
+                CONN[ip]=CONN.get(ip,0)+1
+                counted=True
+                t0=time.time()
             sr,sw=await asyncio.open_connection("127.0.0.1",SSH_PORT)
+            sw.write(buf)
+        elif dns and buf[:2]==b"\x16\x03":
+            sr,sw=await asyncio.open_connection("127.0.0.1",DNS_TLS_FRONT)
             sw.write(buf)
         else:
             h2=buf.startswith(b"PRI ")
@@ -157,5 +166,6 @@ async def main():
                 raise
             print("IPv6 listener skipped:",e,file=sys.stderr)
     servers.append(await asyncio.start_server(lambda r,w:handle(r,w,True),"127.0.0.1",TLS_PORT,backlog=1024))
+    servers.append(await asyncio.start_server(lambda r,w:handle(r,w,False,True),"127.0.0.1",DNS_PORT,backlog=1024))
     await asyncio.gather(*(s.serve_forever() for s in servers))
 asyncio.run(main())
