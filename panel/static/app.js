@@ -4,10 +4,10 @@ const csrf=$('meta[name=csrf]').content;
 const VERSION=$('meta[name=version]').content;
 const NS='http://www.w3.org/2000/svg';
 const GB=1073741824;
-const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},sshudp:{i:'tower-broadcast',n:'UDP Custom'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},sshudp:{i:'tower-broadcast',n:'UDP Custom'},sshdns:{i:'satellite-dish',n:'SSH VayDNS'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
 const THEMES=[['blue','#6366f1','#06b6d4'],['red','#dc2626','#fb7185'],['green','#16a34a','#2dd4bf'],['purple','#8b5cf6','#e879f9'],['cyan','#0891b2','#22d3ee'],['orange','#ea580c','#fbbf24'],['pink','#db2777','#f472b6'],['gold','#d97706','#fde047'],['navy','#2563eb','#60a5fa'],['teal','#0d9488','#5eead4'],['lime','#84cc16','#d9f99d'],['fuchsia','#c026d3','#f0abfc'],['wine','#9f1239','#f43f5e'],['coffee','#a8734a','#e0b48a'],['slate','#94a3b8','#e2e8f0']];
 const setTheme=v=>{try{localStorage.setItem('theme',v)}catch(e){}document.documentElement.dataset.theme=v};
-const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':a.transport==='udp'?'sshudp':'sshws'):a.proto;
+const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':a.transport==='udp'?'sshudp':a.transport==='dns'?'sshdns':'sshws'):a.proto;
 const SIC={ok:'circle-check',off:'circle-minus',bad:'circle-xmark',warn:'triangle-exclamation'};
 const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
@@ -340,8 +340,9 @@ el('div',{class:'kv'},el('span',{},ic('clock'),t('c_expiry')),el('b',{class:'dtv
 el('div',{class:'kv'},el('span',{},ic('hourglass-half'),t('c_left')),el('b',{},left(r.expires))),
 r.note?el('div',{class:'note-b'},el('span',{},ic('note-sticky'),t('f_note')),el('div',{class:'note-t'},r.note)):null);
 const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
+const warn2=(r.transport==='dns'&&r.dns_ok===false)?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_dns_off')):null;
 const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('div',{class:'acts'},i.k==='page'?el('a',{class:'icon-btn',href:i.value,target:'_blank',rel:'noopener noreferrer',title:t('open'),'aria-label':t('open')},ic('arrow-up-right-from-square')):null,el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy')))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
-modal(t('i_title',n),el('div',{},head,warn,...items))
+modal(t('i_title',n),el('div',{},head,warn,warn2,...items))
 }catch(e){terr(e)}
 }
 async function accDlg(a){
@@ -349,7 +350,7 @@ if(!S){try{await loadStats()}catch(e){}}
 const ed=!!a;
 const tlsOn=!S||S.tls_on!==false;
 const forced=!tlsOn&&!ed;
-const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',transport:ed&&a.proto==='ssh'?(a.transport||'ws'):'ws',net:ed&&a.proto!=='ssh'&&a.transport==='grpc'?'grpc':'ws',tls:forced?'plain':ed?a.tls:'both'};
+const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',transport:ed&&a.proto==='ssh'?(a.transport||'ws'):'ws',net:ed&&a.proto!=='ssh'&&(a.transport==='grpc'||a.transport==='dns')?a.transport:'ws',tls:forced?'plain':ed?a.tls:'both'};
 const name=el('input',{placeholder:'user1',maxlength:20,autocomplete:'off',dir:'ltr',value:ed?a.name:''});
 if(ed)name.disabled=true;
 const secret=el('input',{autocomplete:'off',dir:'ltr',placeholder:ed?t('f_keep'):t('f_auto')});
@@ -367,24 +368,26 @@ let CB=null;
 try{const r=await api('GET','/api/components');CB={};r.combos.forEach(x=>{CB[x.k]=x})}catch(e){}
 const av=k=>!CB||!!(CB[k]&&CB[k].avail);
 const V2P=['vless','vmess','trojan'];
-const baseOf=(kind,proto,tr)=>kind==='v2'?proto:(tr==='ssl'?'sshssl':tr==='udp'?'sshudp':'sshws');
+const baseOf=(kind,proto,tr)=>kind==='v2'?(tr==='dns'?proto+'dns':proto):(tr==='ssl'?'sshssl':tr==='udp'?'sshudp':tr==='dns'?'sshdns':'sshws');
+const curBase=()=>baseOf(st.kind,st.proto,st.kind==='v2'?st.net:st.transport);
 const orgBase=ed?baseOf(a.proto==='ssh'?'ssh':'v2',a.proto,a.transport):'';
 const isUdp=()=>st.kind==='ssh'&&st.transport==='udp';
-const kindOk=k=>ed||(k==='ssh'?['sshws:tls','sshws:plain','sshssl:tls','sshssl:plain','sshudp:udp']:V2P.flatMap(p=>[p+':tls',p+':plain'])).some(av);
+const kindOk=k=>ed||(k==='ssh'?['sshws:tls','sshws:plain','sshssl:tls','sshssl:plain','sshdns:tls','sshdns:plain','sshudp:udp']:V2P.flatMap(p=>[p+':tls',p+':plain'])).some(av);
 const protoOk=p=>(ed&&a.proto===p)||av(p+':tls')||av(p+':plain');
-const trOk=x=>{if(ed&&a.proto==='ssh'&&a.transport===x)return true;if(x==='udp')return av('sshudp:udp');const b=x==='ssl'?'sshssl':'sshws';return av(b+':tls')||av(b+':plain')};
-const tlsOk=m=>{const b=baseOf(st.kind,st.proto,st.transport);if(ed&&b===orgBase&&a.tls===m)return true;return m==='both'?av(b+':tls')&&av(b+':plain'):av(b+':'+m)};
+const trOk=x=>{if(ed&&a.proto==='ssh'&&a.transport===x)return true;if(x==='udp')return av('sshudp:udp');const b=x==='ssl'?'sshssl':x==='dns'?'sshdns':'sshws';return av(b+':tls')||av(b+':plain')};
+const netOk=x=>{if(x!=='dns')return true;if(ed&&a.proto!=='ssh'&&a.transport==='dns')return true;return av(st.proto+'dns:tls')||av(st.proto+'dns:plain')};
+const tlsOk=m=>{const b=curBase();if(ed&&b===orgBase&&a.tls===m)return true;return m==='both'?av(b+':tls')&&av(b+':plain'):av(b+':'+m)};
 const kindOpts=()=>[{v:'ssh',l:'SSH',i:'terminal',dis:!kindOk('ssh')},{v:'v2',l:'V2Ray',i:'bolt',dis:!kindOk('v2')}];
 const protoOpts=()=>[{v:'vless',l:'VLESS',i:'bolt'},{v:'vmess',l:'VMess',i:'diagram-project'},{v:'trojan',l:'Trojan',i:'shield-halved'}].map(o=>({...o,dis:!protoOk(o.v)}));
-const trOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'ssl',l:t('tr_ssl'),i:'lock'},{v:'udp',l:t('tr_udp'),i:'tower-broadcast'}].map(o=>({...o,dis:!trOk(o.v)}));
+const trOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'ssl',l:t('tr_ssl'),i:'lock'},{v:'dns',l:t('tr_dns'),i:'satellite-dish'},{v:'udp',l:t('tr_udp'),i:'tower-broadcast'}].map(o=>({...o,dis:!trOk(o.v)}));
 const tlsOpts=()=>[{v:'tls',l:t('tls_tls'),i:'lock'},{v:'plain',l:t('tls_plain'),i:'lock-open'},{v:'both',l:t('tls_both'),i:'layer-group'}].map(o=>({...o,dis:!tlsOk(o.v)}));
-const selKeys=()=>{if(st.kind==='v2'||!isUdp()){const b=baseOf(st.kind,st.proto,st.transport);return(st.tls==='both'?['tls','plain']:[st.tls]).map(m=>b+':'+m)}return['sshudp:udp']};
+const selKeys=()=>{if(st.kind==='v2'||!isUdp()){const b=curBase();return(st.tls==='both'?['tls','plain']:[st.tls]).map(m=>b+':'+m)}return['sshudp:udp']};
 const kindSeg=seg(kindOpts(),st.kind,v=>{st.kind=v;sync()});
 const protoSeg=seg(protoOpts(),st.proto,v=>{st.proto=v;sync()});
 const tlsSeg=seg(tlsOpts(),st.tls,v=>{st.tls=v});tlsSeg.classList.add('s3');
-const transportSeg=seg(trOpts(),st.transport,v=>{st.transport=v;sync()});
-const netOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'grpc',l:t('tr_grpc'),i:'network-wired'}];
-const netSeg=seg(netOpts(),st.net,v=>{st.net=v});
+const transportSeg=seg(trOpts(),st.transport,v=>{st.transport=v;sync()});transportSeg.classList.add('sq4');
+const netOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'grpc',l:t('tr_grpc'),i:'network-wired'},{v:'dns',l:t('tr_dns'),i:'satellite-dish',dis:!netOk('dns')}];
+const netSeg=seg(netOpts(),st.net,v=>{st.net=v;sync()});
 const tlsHint=el('div',{class:'hint'},ic('triangle-exclamation'),t('tls_unavailable'));
 const unav=el('div',{class:'hint'},ic('circle-info'),t('f_unavail_hint'));
 const secLabel=el('span',{});
@@ -400,15 +403,16 @@ function sync(){
 if(!ed){
 if(!kindOk(st.kind))st.kind=kindOk('ssh')?'ssh':'v2';
 if(st.kind==='v2'&&!protoOk(st.proto))st.proto=V2P.find(protoOk)||st.proto;
-if(st.kind==='ssh'&&!trOk(st.transport))st.transport=['ws','ssl','udp'].find(trOk)||st.transport;
+if(st.kind==='ssh'&&!trOk(st.transport))st.transport=['ws','ssl','dns','udp'].find(trOk)||st.transport;
+if(st.kind==='v2'&&!netOk(st.net))st.net='ws';
 if(isUdp())st.tls='plain';
 else if(!forced&&!tlsOk(st.tls))st.tls=['both','plain','tls'].find(tlsOk)||st.tls
 }
 const v2=st.kind==='v2',udp=isUdp();
 kindSeg.upd(kindOpts(),st.kind);protoSeg.upd(protoOpts(),st.proto);transportSeg.upd(trOpts(),st.transport);tlsSeg.upd(tlsOpts(),st.tls);
 cProto.set(!v2||ed);cTransport.set(v2);cNet.set(!v2);netSeg.upd(netOpts(),st.net);cTls.set(forced||udp);cTlsHint.set(!forced||udp);
-cUnav.set(!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!(forced||udp)&&tlsOpts().some(o=>o.dis)))));
-tlsHintTxt.textContent=t(!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
+cUnav.set(!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(v2&&netOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!(forced||udp)&&tlsOpts().some(o=>o.dis)))));
+tlsHintTxt.textContent=t((v2?st.net==='dns':st.transport==='dns')?'f_tls_hint_dns':!v2&&st.transport==='ssl'?'f_tls_hint_ssl':'f_tls_hint');
 cConn.set(v2);connHint.textContent=t('f_conn_limit_ssh');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
@@ -449,10 +453,13 @@ await load()
 function compsBox(){
 const ML={tls:t('cb_tls'),plain:t('cb_plain'),udp:t('cb_udp')};
 const V2R=['vless','vmess','trojan'].flatMap(p=>['tls','plain'].map(m=>[p,m]));
+const DNSN={sshdns:'SSH',vlessdns:'VLESS',vmessdns:'VMess',trojandns:'Trojan'};
+const DNSR=['sshdns','vlessdns','vmessdns','trojandns'].flatMap(p=>['tls','plain'].map(m=>[p,m]));
 const BL=[
 {c:'wsbridge',i:'terminal',n:'SSH WebSocket',d:'cb_ws_desc',rows:[['sshws','tls'],['sshws','plain']]},
 {c:'sshssl',i:'lock',n:'SSH SSL',d:'cb_ssl_desc',rows:[['sshssl','tls'],['sshssl','plain']]},
 {c:'udpcustom',i:'tower-broadcast',n:'UDP Custom',d:'cb_udp_desc',rows:[['sshudp','udp']]},
+{c:'vaydns',i:'satellite-dish',n:'VayDNS',d:'cb_dns_desc',rows:DNSR},
 {c:'xray',i:'bolt',n:'Xray',d:'cb_xray_desc',rows:V2R}];
 const box=el('div',{class:'kvs cols xl'},el('div',{class:'empty'},ic('spinner','fa-spin')));
 let R=null;
@@ -480,12 +487,28 @@ if(!v&&enabledN===1&&cm.removable&&cm.installed&&cm.accounts>0){const d=ask(t('c
 else send()
 });
 if(!cm.installed||busy)s.disabled=true;
-return el('div',{class:'cbrow'},el('div',{class:'srow-t'},el('b',{},(b.c==='xray'?PM[p].n+' · ':'')+ML[m]),x.why==='no_tls'?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('cb_no_tls')):null),s)
+return el('div',{class:'cbrow'},el('div',{class:'srow-t'},el('b',{},(b.c==='xray'?PM[p].n+' · ':b.c==='vaydns'?DNSN[p]+' · ':'')+ML[m]),x.why==='no_tls'?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('cb_no_tls')):null),s)
 });
 const info=[];
 if(b.c==='udpcustom'){
 if(!cm.installed)info.push(el('div',{class:'hint'},ic('triangle-exclamation'),t('udp_warn_1')));
 else{info.push(el('div',{class:'muted sm'},t('udp_portl')+': ',el('b',{class:'ltr'},cm.port)));
+if(cm.info&&cm.info.url)info.push(el('div',{class:'muted sm brk'},t('udp_src')+': ',el('span',{class:'ltr'},cm.info.url)));
+if(cm.info&&cm.info.sha256)info.push(el('div',{class:'muted sm brk'},t('udp_sha')+': ',el('span',{class:'ltr'},cm.info.sha256)))}
+}
+if(b.c==='vaydns'){
+if(!cm.installed)info.push(el('div',{class:'hint'},ic('circle-info'),t('dns_prereq')));
+else{
+const di=el('input',{dir:'ltr',placeholder:'t.example.com',value:cm.domain||'',autocomplete:'off'});
+const sv=btn(t('save'),'floppy-disk',async()=>{try{await api('POST','/api/vaydns/config',{domain:di.value.trim().toLowerCase()});toast(t('done'))}catch(e){terr(e)}await fill()},'pri');
+if(busy)sv.disabled=true;
+info.push(field(t('dns_domain'),el('div',{class:'inp-row'},di,sv)));
+if(!cm.domain)info.push(el('div',{class:'hint'},ic('triangle-exclamation'),t('dns_no_domain')));
+else{
+info.push(el('div',{class:'muted sm'},t('dns_portl')+': ',el('b',{class:'ltr'},cm.port+'/UDP')));
+if(cm.pubkey)info.push(el('div',{class:'muted sm brk'},t('dns_pubkey')+': ',el('span',{class:'ltr'},cm.pubkey)));
+info.push(el('div',{class:'muted sm'},t('dns_rec',cm.domain,cm.server_ip||'—')))}
+if(!R.comps.xray.installed)info.push(el('div',{class:'muted sm'},ic('circle-info'),' '+t('cb_dns_need_xray')));
 if(cm.info&&cm.info.url)info.push(el('div',{class:'muted sm brk'},t('udp_src')+': ',el('span',{class:'ltr'},cm.info.url)));
 if(cm.info&&cm.info.sha256)info.push(el('div',{class:'muted sm brk'},t('udp_sha')+': ',el('span',{class:'ltr'},cm.info.sha256)))}
 }
