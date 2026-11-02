@@ -539,6 +539,12 @@ def collect(c):
             SPEED={n:(b[0]/dt,b[1]/dt,now) for n,b in SP_B.items()}
             SP_B.clear()
             SP_T=now
+def is_live(n,proto,status,conn):
+    if status!="active":
+        return False
+    if proto=="ssh":
+        return conn>0
+    return time.time()-ACTIVE.get(n,0)<ACTIVE_TTL
 def speed_of(n):
     sp=SPEED.get(n)
     if not sp or time.time()-sp[2]>SPEED_TTL:
@@ -1525,7 +1531,7 @@ def lst():
         cn=CONN.get(r["name"],{})
         o["conn"]=cn.get("n",0)
         o["conn_limit"]=r["conn_limit"]
-        o["active"]=r["status"]=="active" and (o["conn"]>0 or time.time()-ACTIVE.get(r["name"],0)<ACTIVE_TTL)
+        o["active"]=is_live(r["name"],r["proto"],r["status"],o["conn"])
         o["sp_up"],o["sp_down"]=speed_of(r["name"]) if o["active"] else (0,0)
         rows.append(o)
     c.close()
@@ -1612,7 +1618,7 @@ def info(name):
     if public_on():
         items.insert(0,{"k":"page","value":page_url(n),"rows":1})
     cn=CONN.get(n,{})
-    act=r["status"]=="active" and (cn.get("n",0)>0 or time.time()-ACTIVE.get(n,0)<ACTIVE_TTL)
+    act=is_live(n,r["proto"],r["status"],cn.get("n",0))
     spu,spd=speed_of(n) if act else (0,0)
     return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"],dns_ok=bool(vaydns_domain() and vaydns_pub()))
 def parse_common(d,creating):
@@ -1840,7 +1846,7 @@ def public_api(name):
     if not r:
         return err("not_found",404)
     cn=CONN.get(name,{})
-    act=r["status"]=="active" and (cn.get("n",0)>0 or time.time()-ACTIVE.get(name,0)<ACTIVE_TTL)
+    act=is_live(name,r["proto"],r["status"],cn.get("n",0))
     spu,spd=speed_of(name) if act else (0,0)
     return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()),cc=server_cc())
 @app.get("/<name>")

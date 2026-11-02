@@ -24,7 +24,22 @@ def scan(uids):
             if uid not in want:
                 continue
             with open("/proc/%s/stat"%n) as f:
-                st=int(f.read().rpartition(")")[2].split()[19])
+                z=f.read().rpartition(")")[2].split()
+            st=int(z[19])
+            pp=z[1]
+            # one SSH connection = one authenticated sshd process whose parent is the root sshd monitor.
+            # forked helper children (same uid and name) and orphans reparented to init are not connections.
+            with open("/proc/%s/comm"%pp) as f:
+                if not f.read().startswith("sshd"):
+                    continue
+            with open("/proc/%s/status"%pp) as f:
+                puid=None
+                for l in f:
+                    if l.startswith("Uid:"):
+                        puid=int(l.split()[1])
+                        break
+            if puid!=0:
+                continue
         except (OSError,ValueError,IndexError):
             continue
         out.setdefault(uid,[]).append((st,int(n)))
