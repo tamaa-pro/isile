@@ -145,6 +145,12 @@ dialog.cl::backdrop{animation:fadeo .17s ease forwards}
 @media(max-width:720px){.seg.s3 button{padding:8px 2px;gap:5px;font-size:13.5px;min-width:0}.seg.s3 button i{display:none}}
 @media(max-width:400px){.seg.s3 button{font-size:12.5px}}
 .seg.sq4 button span{text-align:center;line-height:1.25}
+.seg.sq5{display:grid;grid-template-columns:repeat(6,minmax(0,1fr))}
+.seg.sq5 button:nth-of-type(-n+3){grid-column:span 2}
+.seg.sq5 button:nth-of-type(n+4){grid-column:span 3}
+.seg.sq5 button span{text-align:center;line-height:1.25}
+@media(max-width:720px){.seg.sq5 button{padding:8px 2px;gap:4px;font-size:13px;min-width:0}.seg.sq5 button i{display:none}}
+@media(max-width:400px){.seg.sq5 button{font-size:12px}}
 @media(max-width:720px){.seg.sq4 button{padding:8px 2px;gap:4px;font-size:13px;min-width:0}.seg.sq4 button i{display:none}}
 @media(max-width:400px){.seg.sq4 button{font-size:12px}}
 .f{min-width:0;grid-template-columns:minmax(0,1fr)}

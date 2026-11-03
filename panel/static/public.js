@@ -1,8 +1,8 @@
 'use strict';
 const $=(s,r=document)=>r.querySelector(s);
 const NAME=$('meta[name=acc]').content;
-const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},sshudp:{i:'tower-broadcast',n:'UDP Custom'},sshdns:{i:'satellite-dish',n:'SSH VayDNS'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
-const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':a.transport==='udp'?'sshudp':a.transport==='dns'?'sshdns':'sshws'):a.proto;
+const PM={sshws:{i:'terminal',n:'SSH WS'},sshssl:{i:'lock',n:'SSH SSL'},sshudp:{i:'tower-broadcast',n:'UDP Custom'},sshdns:{i:'satellite-dish',n:'SSH VayDNS'},sshslowdns:{i:'satellite',n:'SSH SlowDNS'},vless:{i:'bolt',n:'VLESS'},vmess:{i:'diagram-project',n:'VMess'},trojan:{i:'shield-halved',n:'Trojan'}};
+const pk=a=>a.proto==='ssh'?(a.transport==='ssl'?'sshssl':a.transport==='udp'?'sshudp':a.transport==='dns'?'sshdns':a.transport==='slowdns'?'sshslowdns':'sshws'):a.proto;
 const SC={active:'ok',disabled:'off',expired:'bad',limit:'warn'};
 const el=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat()){if(c==null||c===false)continue;e.append(c instanceof Node?c:document.createTextNode(String(c)))}return e};
 const ic=(n,c='')=>el('i',{class:'fa-solid fa-'+n+(c?' '+c:'')});
