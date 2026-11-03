@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom|vaydns>
+# Usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom|vaydns|slowdns>
 # Output goes to stdout/stderr: the caller (install.sh or the panel job) redirects it to the log.
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -19,6 +19,13 @@ VAYDNS_URL="${VAYDNS_URL:-}"
 VAYDNS_SHA256="$(echo "${VAYDNS_SHA256:-}" | tr 'A-F' 'a-f' | tr -d ' ')"
 VAYDNS_UDP=5300
 VAYDNS_UPSTREAM=10053
+SLOWDNS_DIR=/usr/local/lib/isile/slowdns
+SLOWDNS_USER=slowdns
+SLOWDNS_ENV=/etc/vpnpanel/slowdns.env
+SLOWDNS_INFO=/etc/vpnpanel/slowdns.info
+SLOWDNS_UDP=5301
+DNSFRONT_UDP=5302
+DNSFRONT_NFT=/usr/local/lib/isile/dnsfront.nft
 UDPC_URL="${UDPC_URL:-}"
 UDPC_SHA256="$(echo "${UDPC_SHA256:-}" | tr 'A-F' 'a-f' | tr -d ' ')"
 ACTION="${1:-}"
@@ -358,19 +365,28 @@ udpgw_setup || true
 # The server listens on UDP 5300 as an unprivileged user; an nftables rule redirects incoming UDP 53 to it
 # (so systemd-resolved can keep its own loopback listener). Everything the tunnel carries is forwarded to the
 # local multiplexer (127.0.0.1:10053), which sends SSH to sshd, TLS to stunnel and HTTP to nginx.
-vaydns_files(){
-install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
-cat > "$VAYDNS_DIR/redirect.nft" <<EOT
-table inet isile_vaydns
-delete table inet isile_vaydns
-table inet isile_vaydns {
+# UDP 53 is shared by VayDNS and SlowDNS: nftables redirects it to the DNS front inside vpnmux (UDP $DNSFRONT_UDP),
+# which hands every query to the tunnel server that owns the query's domain (zones written by the panel to /etc/vpnpanel/dnszones).
+dnsfront_files(){
+install -d -m755 /usr/local/lib/isile
+cat > "$DNSFRONT_NFT" <<EOT
+table inet isile_dns
+delete table inet isile_dns
+table inet isile_dns {
  chain pre {
   type nat hook prerouting priority dstnat; policy accept;
-  iifname != "lo" udp dport 53 redirect to :$VAYDNS_UDP
+  iifname != "lo" udp dport 53 redirect to :$DNSFRONT_UDP
  }
 }
 EOT
-chmod 644 "$VAYDNS_DIR/redirect.nft"
+chmod 644 "$DNSFRONT_NFT"
+# the redirect rewrites the destination port before the firewall sees it, so the front port must be open
+if command -v ufw >/dev/null 2>&1; then ufw allow "$DNSFRONT_UDP/udp" >/dev/null 2>&1 || true; fi
+}
+vaydns_files(){
+install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
+rm -f "$VAYDNS_DIR/redirect.nft"
+dnsfront_files
 cat > /etc/systemd/system/vaydns.service <<EOT
 [Unit]
 Description=VayDNS server (DNS tunnel)
@@ -380,9 +396,10 @@ ConditionPathExists=$VAYDNS_ENV
 User=$VAYDNS_USER
 Group=$VAYDNS_USER
 EnvironmentFile=$VAYDNS_ENV
-ExecStartPre=-+/usr/sbin/nft -f $VAYDNS_DIR/redirect.nft
+ExecStartPre=-+/usr/sbin/nft delete table inet isile_vaydns
+ExecStartPre=-+/usr/sbin/nft -f $DNSFRONT_NFT
 ExecStart=$VAYDNS_DIR/vaydns-server -udp :$VAYDNS_UDP -privkey-file $VAYDNS_DIR/server.key -domain \${VAYDNS_DOMAIN} -upstream 127.0.0.1:$VAYDNS_UPSTREAM
-ExecStopPost=-+/usr/sbin/nft delete table inet isile_vaydns
+ExecStopPost=-+/bin/sh -c "systemctl is-active --quiet slowdns || /usr/sbin/nft delete table inet isile_dns"
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
@@ -403,14 +420,12 @@ CapabilityBoundingSet=
 WantedBy=multi-user.target
 EOT
 }
-install_vaydns(){
-echo "Installing VayDNS (DNS tunnel)"
-local ARCH URL TMP SHA EXP
+vaydns_fetch(){
+local ARCH URL SHA EXP TMP="$1"
 case "$(uname -m)" in x86_64) ARCH=amd64;; aarch64) ARCH=arm64;; *) die "unsupported architecture $(uname -m)";; esac
 URL="$VAYDNS_URL"
 [ -n "$URL" ] || URL="$VAYDNS_BASE/vaydns-server-linux-$ARCH"
 [[ "$URL" =~ ^https:// ]] || die "VAYDNS_URL must be an https:// address"
-TMP="$(mktemp -d)"
 echo "Source: $URL"
 curl -fsSL --max-time 180 -o "$TMP/vaydns" "$URL" || { rm -rf "$TMP"; die "cannot download VayDNS from $URL"; }
 [ "$(head -c4 "$TMP/vaydns" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || { rm -rf "$TMP"; die "the downloaded file is not a Linux executable"; }
@@ -424,6 +439,16 @@ EXP="$(grep -oE '[0-9a-fA-F]{64}' "$TMP/vaydns.sha256" | head -1 | tr 'A-F' 'a-f
 fi
 if [ -n "$EXP" ] && [ "$EXP" != "$SHA" ]; then rm -rf "$TMP"; die "VayDNS SHA-256 mismatch (expected $EXP)"; fi
 if [ -z "$EXP" ]; then echo "Note: no VAYDNS_SHA256 was supplied, so the binary could not be verified against a known hash"; fi
+VURL="$URL"
+VSHA="$SHA"
+}
+install_vaydns(){
+echo "Installing VayDNS (DNS tunnel)"
+local URL TMP SHA
+TMP="$(mktemp -d)"
+vaydns_fetch "$TMP"
+URL="$VURL"
+SHA="$VSHA"
 getent group "$VAYDNS_USER" >/dev/null || groupadd -r "$VAYDNS_USER"
 id "$VAYDNS_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin -g "$VAYDNS_USER" "$VAYDNS_USER"
 install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
@@ -455,7 +480,12 @@ echo "Removing VayDNS"
 systemctl disable --now vaydns >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/vaydns.service "$VAYDNS_ENV" "$VAYDNS_INFO"
 nft delete table inet isile_vaydns >/dev/null 2>&1 || true
-if command -v ufw >/dev/null 2>&1; then ufw delete allow 53/udp >/dev/null 2>&1 || true; ufw delete allow "$VAYDNS_UDP/udp" >/dev/null 2>&1 || true; fi
+if [ ! -d "$SLOWDNS_DIR" ]; then
+nft delete table inet isile_dns >/dev/null 2>&1 || true
+rm -f "$DNSFRONT_NFT"
+if command -v ufw >/dev/null 2>&1; then ufw delete allow 53/udp >/dev/null 2>&1 || true; ufw delete allow "$DNSFRONT_UDP/udp" >/dev/null 2>&1 || true; fi
+fi
+if command -v ufw >/dev/null 2>&1; then ufw delete allow "$VAYDNS_UDP/udp" >/dev/null 2>&1 || true; fi
 rm -rf "$VAYDNS_DIR"
 rmdir /usr/local/lib/isile >/dev/null 2>&1 || true
 id "$VAYDNS_USER" >/dev/null 2>&1 && userdel "$VAYDNS_USER" >/dev/null 2>&1 || true
@@ -471,6 +501,109 @@ vaydns_files
 systemctl daemon-reload
 }
 
+# ---------- SlowDNS (SSH over a DNS tunnel for SlowDNS / dnstt clients) ----------
+# Same open source server binary as VayDNS (net2share/vaydns) started with -dnstt-compat, which speaks the original
+# dnstt wire protocol that SlowDNS apps use. It has its own domain, key pair and UDP port; UDP 53 is shared through the DNS front.
+slowdns_files(){
+install -d -m755 /usr/local/lib/isile "$SLOWDNS_DIR" /etc/vpnpanel
+dnsfront_files
+cat > /etc/systemd/system/slowdns.service <<EOT
+[Unit]
+Description=SlowDNS server (dnstt compatible DNS tunnel)
+After=network.target vpnmux.service
+ConditionPathExists=$SLOWDNS_ENV
+[Service]
+User=$SLOWDNS_USER
+Group=$SLOWDNS_USER
+EnvironmentFile=$SLOWDNS_ENV
+ExecStartPre=-+/usr/sbin/nft delete table inet isile_vaydns
+ExecStartPre=-+/usr/sbin/nft -f $DNSFRONT_NFT
+ExecStart=$SLOWDNS_DIR/vaydns-server -udp :$SLOWDNS_UDP -privkey-file $SLOWDNS_DIR/server.key -dnstt-compat -domain \${SLOWDNS_DOMAIN} -upstream 127.0.0.1:$VAYDNS_UPSTREAM
+ExecStopPost=-+/bin/sh -c "systemctl is-active --quiet vaydns || /usr/sbin/nft delete table inet isile_dns"
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+[Install]
+WantedBy=multi-user.target
+EOT
+}
+install_slowdns(){
+echo "Installing SlowDNS (DNS tunnel)"
+local TMP SRC SHA
+TMP="$(mktemp -d)"
+if [ -x "$VAYDNS_DIR/vaydns-server" ]; then
+echo "Using the VayDNS server binary that is already installed"
+cp "$VAYDNS_DIR/vaydns-server" "$TMP/vaydns"
+SRC="$(grep '^url=' "$VAYDNS_INFO" 2>/dev/null | cut -d= -f2- || true)"
+else
+vaydns_fetch "$TMP"
+SRC="$VURL"
+fi
+SHA="$(sha256sum "$TMP/vaydns" | cut -d' ' -f1)"
+getent group "$SLOWDNS_USER" >/dev/null || groupadd -r "$SLOWDNS_USER"
+id "$SLOWDNS_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin -g "$SLOWDNS_USER" "$SLOWDNS_USER"
+install -d -m755 /usr/local/lib/isile "$SLOWDNS_DIR" /etc/vpnpanel
+install -m755 "$TMP/vaydns" "$SLOWDNS_DIR/vaydns-server"
+rm -rf "$TMP"
+if [ ! -s "$SLOWDNS_DIR/server.key" ] || [ ! -s "$SLOWDNS_DIR/server.pub" ]; then
+rm -f "$SLOWDNS_DIR/server.key" "$SLOWDNS_DIR/server.pub"
+"$SLOWDNS_DIR/vaydns-server" -gen-key -privkey-file "$SLOWDNS_DIR/server.key" -pubkey-file "$SLOWDNS_DIR/server.pub" >/dev/null || die "SlowDNS key generation failed"
+[ -s "$SLOWDNS_DIR/server.key" ] && [ -s "$SLOWDNS_DIR/server.pub" ] || die "SlowDNS did not write its key files"
+fi
+chown "$SLOWDNS_USER:$SLOWDNS_USER" "$SLOWDNS_DIR/server.key"
+chmod 600 "$SLOWDNS_DIR/server.key"
+chmod 644 "$SLOWDNS_DIR/server.pub"
+printf 'url=%s\nsha256=%s\n' "$SRC" "$SHA" > "$SLOWDNS_INFO"
+chmod 644 "$SLOWDNS_INFO"
+slowdns_files
+if command -v ufw >/dev/null 2>&1; then ufw allow 53/udp || true; ufw allow "$SLOWDNS_UDP/udp" || true; fi
+systemctl daemon-reload
+systemctl enable slowdns >/dev/null 2>&1 || true
+dbset comp_slowdns 1
+if [ -n "${SLOWDNS_DOMAIN:-}" ]; then
+[[ "$SLOWDNS_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid SlowDNS tunnel domain: $SLOWDNS_DOMAIN"
+dbset slowdns_domain "$SLOWDNS_DOMAIN"
+fi
+echo "SlowDNS installed. Set the tunnel domain in Settings > Components, then add its NS record; UDP 53 must be open."
+}
+uninstall_slowdns(){
+echo "Removing SlowDNS"
+systemctl disable --now slowdns >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/slowdns.service "$SLOWDNS_ENV" "$SLOWDNS_INFO"
+if [ ! -d "$VAYDNS_DIR" ]; then
+nft delete table inet isile_dns >/dev/null 2>&1 || true
+rm -f "$DNSFRONT_NFT"
+if command -v ufw >/dev/null 2>&1; then ufw delete allow 53/udp >/dev/null 2>&1 || true; ufw delete allow "$DNSFRONT_UDP/udp" >/dev/null 2>&1 || true; fi
+fi
+if command -v ufw >/dev/null 2>&1; then ufw delete allow "$SLOWDNS_UDP/udp" >/dev/null 2>&1 || true; fi
+rm -rf "$SLOWDNS_DIR"
+rmdir /usr/local/lib/isile >/dev/null 2>&1 || true
+id "$SLOWDNS_USER" >/dev/null 2>&1 && userdel "$SLOWDNS_USER" >/dev/null 2>&1 || true
+getent group "$SLOWDNS_USER" >/dev/null 2>&1 && groupdel "$SLOWDNS_USER" >/dev/null 2>&1 || true
+systemctl daemon-reload
+dbset comp_slowdns 0
+echo "SlowDNS removed"
+}
+refresh_slowdns(){
+[ -x "$SLOWDNS_DIR/vaydns-server" ] || return 0
+id "$SLOWDNS_USER" >/dev/null 2>&1 || die "user $SLOWDNS_USER is missing"
+slowdns_files
+systemctl daemon-reload
+}
+
 case "$ACTION:$COMP" in
 install:xray) install_xray;;
 uninstall:xray) uninstall_xray;;
@@ -482,5 +615,8 @@ refresh:udpcustom) refresh_udpcustom;;
 install:vaydns) install_vaydns;;
 uninstall:vaydns) uninstall_vaydns;;
 refresh:vaydns) refresh_vaydns;;
-*) die "usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom|vaydns>";;
+install:slowdns) install_slowdns;;
+uninstall:slowdns) uninstall_slowdns;;
+refresh:slowdns) refresh_slowdns;;
+*) die "usage: components.sh <install|uninstall|refresh> <xray|wsbridge|udpcustom|vaydns|slowdns>";;
 esac

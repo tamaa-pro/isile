@@ -25,8 +25,9 @@ if [ -n "$d" ]; then echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel, H
 if [ -n "$d" ]; then echo " SSH SSL   : direct SSH on 80 (no TLS) and 443 (TLS via stunnel)"; else echo " SSH SSL   : direct SSH on 80 (no TLS)"; fi
 echo " Paths     : /vless /vmess /trojan (WS), vless-grpc vmess-grpc trojan-grpc (gRPC), any other path = SSH WebSocket"
 if [ -f /etc/systemd/system/vaydns.service ]; then echo " VayDNS    : UDP 53 | tunnel domain: $(dbget vaydns_domain | grep . || echo 'not set (set it in the panel)')"; fi
+if [ -f /etc/systemd/system/slowdns.service ]; then echo " SlowDNS   : UDP 53 | tunnel domain: $(dbget slowdns_domain | grep . || echo 'not set (set it in the panel)')"; fi
 echo " Services  :"
-local svcs="vpnpanel vpnbridge vpnmux xray nginx udp-custom vaydns" st
+local svcs="vpnpanel vpnbridge vpnmux xray nginx udp-custom vaydns slowdns" st
 [ -z "$d" ] || svcs="$svcs vpnstunnel"
 for s in $svcs; do
 if [ -f "/etc/systemd/system/$s.service" ] || [ "$s" = nginx ]; then st="$(systemctl is-active "$s" 2>/dev/null)"; else st="not installed"; fi
@@ -63,15 +64,15 @@ bash <(curl -fsSL "https://raw.githubusercontent.com/$r/$b/install.sh") --update
 uninstall(){
 local ans d n
 if [ "${1:-}" = "--yes" ]; then ans=YES; else
-echo "This removes the panel, Xray, the SSH bridge and SSL multiplexer, stunnel, UDP Custom and VayDNS (if installed), all VPN accounts and the TLS certificate."
+echo "This removes the panel, Xray, the SSH bridge and SSL multiplexer, stunnel, UDP Custom, VayDNS and SlowDNS (if installed), all VPN accounts and the TLS certificate."
 read -rp "Type YES to continue: " ans
 fi
 [ "$ans" = "YES" ] || { echo "Cancelled"; return 1; }
 d="$(dbget domain)"
 local names
 names="$(dbq "SELECT name FROM accounts WHERE proto='ssh'")"
-systemctl disable --now vpnpanel vpnbridge vpnmux vpnstunnel xray udp-custom vpn-udpgw vaydns >/dev/null 2>&1
-rm -f /etc/systemd/system/vaydns.service /etc/systemd/system/vpnpanel.service /etc/systemd/system/vpnbridge.service /etc/systemd/system/vpnmux.service /etc/systemd/system/vpnstunnel.service /etc/systemd/system/xray.service /etc/systemd/system/udp-custom.service /etc/systemd/system/vpn-udpgw.service /etc/vpnpanel/udpgw.nft
+systemctl disable --now vpnpanel vpnbridge vpnmux vpnstunnel xray udp-custom vpn-udpgw vaydns slowdns >/dev/null 2>&1
+rm -f /etc/systemd/system/vaydns.service /etc/systemd/system/slowdns.service /etc/systemd/system/vpnpanel.service /etc/systemd/system/vpnbridge.service /etc/systemd/system/vpnmux.service /etc/systemd/system/vpnstunnel.service /etc/systemd/system/xray.service /etc/systemd/system/udp-custom.service /etc/systemd/system/vpn-udpgw.service /etc/vpnpanel/udpgw.nft
 systemctl daemon-reload
 if [ -d /usr/local/lib/isile/udp-custom ]; then
 up="$(grep -oE '"listen"[^,]*' /usr/local/lib/isile/udp-custom/config.json 2>/dev/null | grep -oE '[0-9]{1,5}' | tail -1)"
@@ -79,17 +80,22 @@ ufw delete allow "${up:-36712}/udp" >/dev/null 2>&1
 fi
 nft delete table inet isile_udpc >/dev/null 2>&1
 nft delete table inet isile_udpgw >/dev/null 2>&1
-if [ -d /usr/local/lib/isile/vaydns ]; then
+if [ -d /usr/local/lib/isile/vaydns ] || [ -d /usr/local/lib/isile/slowdns ]; then
 nft delete table inet isile_vaydns >/dev/null 2>&1
+nft delete table inet isile_dns >/dev/null 2>&1
 ufw delete allow 53/udp >/dev/null 2>&1
 ufw delete allow 5300/udp >/dev/null 2>&1
+ufw delete allow 5301/udp >/dev/null 2>&1
+ufw delete allow 5302/udp >/dev/null 2>&1
 fi
 rm -rf /usr/local/lib/isile /etc/vpnpanel/udp-custom.info
 userdel udpc >/dev/null 2>&1
 userdel udpgw >/dev/null 2>&1
 userdel vaydns >/dev/null 2>&1
+userdel slowdns >/dev/null 2>&1
 groupdel udpc >/dev/null 2>&1
 groupdel vaydns >/dev/null 2>&1
+groupdel slowdns >/dev/null 2>&1
 nft delete table inet vpnacct >/dev/null 2>&1
 for n in $names; do
 uid="$(id -u "$n" 2>/dev/null)"

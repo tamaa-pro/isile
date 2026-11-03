@@ -17,7 +17,7 @@ LOGF="/var/log/isile-install.log"
 BANNER_TXT="/etc/vpnpanel/banner.txt"
 BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
 BANNER_MAX=2000
-LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"])}
+LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"slowdns":("unit",["slowdns"])}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -27,7 +27,7 @@ GB=1073741824
 V2=("vless","vmess","trojan")
 PROTOS=("ssh",)+V2
 MODES=("tls","plain")
-TRANSPORTS=("ws","ssl","udp","grpc","dns")
+TRANSPORTS=("ws","ssl","udp","grpc","dns","slowdns")
 V2NETS=("ws","grpc")
 UNITDIR="/etc/systemd/system"
 UDPC_DIR="/usr/local/lib/isile/udp-custom"
@@ -43,10 +43,18 @@ VAYDNS_INFO="/etc/vpnpanel/vaydns.info"
 VAYDNS_PORT=53
 VAYDNS_UDP=5300
 VAYDNS_LOCAL=7000
-COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","tls","vaydns"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"))
+SLOWDNS_DIR="/usr/local/lib/isile/slowdns"
+SLOWDNS_BIN=SLOWDNS_DIR+"/vaydns-server"
+SLOWDNS_PUB=SLOWDNS_DIR+"/server.pub"
+SLOWDNS_ENV="/etc/vpnpanel/slowdns.env"
+SLOWDNS_INFO="/etc/vpnpanel/slowdns.info"
+SLOWDNS_UDP=5301
+SLOWDNS_LOCAL=7001
+DNS_ZONES="/etc/vpnpanel/dnszones"
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","tls","vaydns"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("sshslowdns","tls","slowdns"),("sshslowdns","plain","slowdns"))
 COMBO_REQ={"vlessdns":"xray","vmessdns":"xray","trojandns":"xray"}
-COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns"}
-REMOVABLE=("wsbridge","udpcustom","xray","vaydns")
+COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns","slowdns":"slowdns"}
+REMOVABLE=("wsbridge","udpcustom","xray","vaydns","slowdns")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
 GPORTS={("vless","tls"):10101,("trojan","tls"):10102,("vmess","tls"):10103,("vless","plain"):10111,("trojan","plain"):10112,("vmess","plain"):10113}
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
@@ -218,6 +226,8 @@ def comp_installed(c):
         return unit_exists("vpnbridge")
     if c=="vaydns":
         return unit_exists("vaydns") and os.path.exists(VAYDNS_BIN)
+    if c=="slowdns":
+        return unit_exists("slowdns") and os.path.exists(SLOWDNS_BIN)
     return True
 def combos_off():
     return {x for x in get("combos_off","").split(",") if x}
@@ -261,17 +271,23 @@ def udpc_info():
     return o or None
 def vaydns_domain():
     return get("vaydns_domain","")
-def vaydns_pub():
+def slowdns_domain():
+    return get("slowdns_domain","")
+def dns_pub(path):
     try:
-        with open(VAYDNS_PUB) as f:
+        with open(path) as f:
             v=f.read().strip()
         return v if re.match(r"^[A-Za-z0-9+/=_-]{16,200}$",v) else ""
     except OSError:
         return ""
-def vaydns_info():
+def vaydns_pub():
+    return dns_pub(VAYDNS_PUB)
+def slowdns_pub():
+    return dns_pub(SLOWDNS_PUB)
+def dns_info(path):
     o={}
     try:
-        with open(VAYDNS_INFO) as f:
+        with open(path) as f:
             for l in f:
                 k,_,v=l.partition("=")
                 if k in ("url","sha256"):
@@ -279,45 +295,82 @@ def vaydns_info():
     except OSError:
         return None
     return o or None
-def vaydns_env_write():
-    d=vaydns_domain()
+def vaydns_info():
+    return dns_info(VAYDNS_INFO)
+def slowdns_info():
+    return dns_info(SLOWDNS_INFO)
+def dns_env_write(path,var,d):
     try:
         if d:
-            txt="VAYDNS_DOMAIN=%s\n"%d
+            txt="%s=%s\n"%(var,d)
             try:
-                with open(VAYDNS_ENV) as f:
+                with open(path) as f:
                     if f.read()==txt:
                         return False
             except OSError:
                 pass
-            os.makedirs(os.path.dirname(VAYDNS_ENV),exist_ok=True)
-            tmp=VAYDNS_ENV+".tmp"
+            os.makedirs(os.path.dirname(path),exist_ok=True)
+            tmp=path+".tmp"
             with open(tmp,"w") as f:
                 f.write(txt)
             os.chmod(tmp,0o644)
-            os.replace(tmp,VAYDNS_ENV)
+            os.replace(tmp,path)
             return True
-        if os.path.exists(VAYDNS_ENV):
-            os.unlink(VAYDNS_ENV)
+        if os.path.exists(path):
+            os.unlink(path)
             return True
     except OSError:
         traceback.print_exc()
     return False
+def vaydns_env_write():
+    return dns_env_write(VAYDNS_ENV,"VAYDNS_DOMAIN",vaydns_domain())
+def slowdns_env_write():
+    return dns_env_write(SLOWDNS_ENV,"SLOWDNS_DOMAIN",slowdns_domain())
+def dns_zones_write(off=None):
+    """UDP 53 is shared: the DNS front in vpnmux routes each query to the tunnel server that owns its domain."""
+    if not (comp_installed("vaydns") or comp_installed("slowdns")):
+        return
+    z=[]
+    if comp_installed("vaydns") and comp_enabled("vaydns",off) and vaydns_domain():
+        z.append("%s %d"%(vaydns_domain(),VAYDNS_UDP))
+    if comp_installed("slowdns") and comp_enabled("slowdns",off) and slowdns_domain():
+        z.append("%s %d"%(slowdns_domain(),SLOWDNS_UDP))
+    txt="".join(x+"\n" for x in z)
+    try:
+        try:
+            with open(DNS_ZONES) as f:
+                if f.read()==txt:
+                    return
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(DNS_ZONES),exist_ok=True)
+        tmp=DNS_ZONES+".tmp"
+        with open(tmp,"w") as f:
+            f.write(txt)
+        os.chmod(tmp,0o644)
+        os.replace(tmp,DNS_ZONES)
+    except OSError:
+        traceback.print_exc()
+def dns_unit_sync(comp,ch,dom,off):
+    if comp_enabled(comp,off) and dom:
+        if not svc_active(comp):
+            sh(["systemctl","enable","--now",comp])
+        elif ch:
+            sh(["systemctl","restart",comp])
+    else:
+        sh(["systemctl","disable","--now",comp])
 def vaydns_sync(off=None):
     if not comp_installed("vaydns"):
         return
-    ch=vaydns_env_write()
-    if comp_enabled("vaydns",off) and vaydns_domain():
-        if not svc_active("vaydns"):
-            sh(["systemctl","enable","--now","vaydns"])
-        elif ch:
-            sh(["systemctl","restart","vaydns"])
-    else:
-        sh(["systemctl","disable","--now","vaydns"])
+    dns_unit_sync("vaydns",vaydns_env_write(),vaydns_domain(),off)
+def slowdns_sync(off=None):
+    if not comp_installed("slowdns"):
+        return
+    dns_unit_sync("slowdns",slowdns_env_write(),slowdns_domain(),off)
 def combo_info(off=None):
     off=combos_off() if off is None else off
     t=tls_on()
-    tdom=vaydns_domain()
+    tdoms={"vaydns":vaydns_domain(),"slowdns":slowdns_domain()}
     inst={c:comp_installed(c) for c in COMP_UNIT}
     out=[]
     for p,m,c in COMBOS:
@@ -329,7 +382,7 @@ def combo_info(off=None):
             why="disabled"
         elif m=="tls" and not t:
             why="no_tls"
-        elif c=="vaydns" and not tdom:
+        elif c in tdoms and not tdoms[c]:
             why="no_domain"
         out.append({"k":k,"p":p,"m":m,"c":c,"enabled":k not in off,"installed":inst[c],"avail":not why,"why":why})
     return out
@@ -337,7 +390,7 @@ def acct_keys(proto,transport,tls):
     if proto=="ssh":
         if transport=="udp":
             return ["sshudp:udp"]
-        base="sshws" if transport=="ws" else "sshdns" if transport=="dns" else "sshssl"
+        base="sshws" if transport=="ws" else "sshdns" if transport=="dns" else "sshslowdns" if transport=="slowdns" else "sshssl"
     else:
         base=proto+"dns" if transport=="dns" else proto
     return [base+":"+m for m in (MODES if tls=="both" else (tls,))]
@@ -352,6 +405,8 @@ def keys_denied(keys):
             b=k.split(":")[0]
             if not vaydns_domain() or (b in COMBO_REQ and not comp_installed(COMBO_REQ[b])):
                 return k
+        if c=="slowdns" and not slowdns_domain():
+            return k
     return ""
 def expected_units():
     u=["vpnpanel","nginx","vpnmux"]
@@ -363,6 +418,8 @@ def expected_units():
         u.append("udp-custom")
     if comp_on("vaydns") and vaydns_domain():
         u.append("vaydns")
+    if comp_on("slowdns") and slowdns_domain():
+        u.append("slowdns")
     try:
         if os.path.getsize("/etc/vpnpanel/stunnel.conf")>0:
             u.append("vpnstunnel")
@@ -721,7 +778,9 @@ def apply_components(c):
                     sh(["systemctl","enable","--now",u])
             else:
                 sh(["systemctl","disable","--now",u])
+        dns_zones_write(off)
         vaydns_sync(off)
+        slowdns_sync(off)
         if comp_installed("xray"):
             if comp_enabled("xray",off):
                 sh(["systemctl","enable","xray"])
@@ -1065,8 +1124,12 @@ def ports_info():
     rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",2080,True,ls)]
     if comp_installed("udpcustom"):
         rows.append(("udp",udp_port(),comp_on("udpcustom"),listening_udp()))
-    if comp_installed("vaydns"):
-        rows.append(("dns",VAYDNS_PORT,comp_on("vaydns") and bool(vaydns_domain()),{VAYDNS_PORT} if VAYDNS_UDP in listening_udp() else set()))
+    if comp_installed("vaydns") or comp_installed("slowdns"):
+        v_on=comp_on("vaydns") and bool(vaydns_domain())
+        s_on=comp_on("slowdns") and bool(slowdns_domain())
+        lu=listening_udp()
+        up=(v_on and VAYDNS_UDP in lu) or (s_on and SLOWDNS_UDP in lu)
+        rows.append(("dns",VAYDNS_PORT,v_on or s_on,{VAYDNS_PORT} if up else set()))
     return [{"k":k,"port":p,"enabled":en,"listening":en and p in l} for k,p,en,l in rows]
 @app.get("/api/stats")
 @auth
@@ -1086,6 +1149,7 @@ def stats():
     sv["panel"]="ok"
     sv["udp-custom"]=block_state("udpcustom",off)
     sv["vaydns"]=block_state("vaydns",off)
+    sv["slowdns"]=block_state("slowdns",off)
     with open("/proc/uptime") as f:
         up=float(f.read().split()[0])
     rx,tx=net_totals()
@@ -1221,7 +1285,7 @@ def log_sources():
         elif k=="stunnel":
             if os.path.exists("/etc/vpnpanel/stunnel.conf") and os.path.getsize("/etc/vpnpanel/stunnel.conf")>0:
                 out.append({"id":k,"kind":"unit"})
-        elif k in ("udpcustom","vaydns"):
+        elif k in ("udpcustom","vaydns","slowdns"):
             if comp_installed(k):
                 out.append({"id":k,"kind":"unit"})
         else:
@@ -1323,7 +1387,7 @@ def domain_set():
         return err("bad_domain")
     if email and not EMAIL_RE.match(email):
         return err("bad_email")
-    if dom==vaydns_domain():
+    if dom in (vaydns_domain(),slowdns_domain()):
         return err("domain_same")
     e=start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email)))
     if e:
@@ -1346,7 +1410,7 @@ def latest_version():
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
-    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom"),("vaydns","vaydns")) if comp_on(c) and (c!="vaydns" or vaydns_domain())]+["nginx","vpnmux"]
+    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom"),("vaydns","vaydns"),("slowdns","slowdns")) if comp_on(c) and (c!="vaydns" or vaydns_domain()) and (c!="slowdns" or slowdns_domain())]+["nginx","vpnmux"]
     e=start_job("restart","sleep 1; systemctl restart %s; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel"%" ".join(us))
     if e:
         return err("system",500,e)
@@ -1434,7 +1498,7 @@ def job_busy():
     except (OSError,ValueError):
         return False
 def comp_accounts(c,comp):
-    q={"xray":"proto IN ('vless','vmess','trojan')","wsbridge":"proto='ssh' AND transport='ws'","udpcustom":"proto='ssh' AND transport='udp'","vaydns":"transport='dns'"}.get(comp)
+    q={"xray":"proto IN ('vless','vmess','trojan')","wsbridge":"proto='ssh' AND transport='ws'","udpcustom":"proto='ssh' AND transport='udp'","vaydns":"transport='dns'","slowdns":"transport='slowdns'"}.get(comp)
     if not q:
         return 0
     return c.execute("SELECT COUNT(*) n FROM accounts WHERE "+q).fetchone()["n"]
@@ -1456,6 +1520,12 @@ def comps_get():
                 o["port"]=VAYDNS_PORT
                 o["server_ip"]=get("server_ip","")
                 o["info"]=vaydns_info()
+            if k=="slowdns":
+                o["domain"]=slowdns_domain()
+                o["pubkey"]=slowdns_pub()
+                o["port"]=VAYDNS_PORT
+                o["server_ip"]=get("server_ip","")
+                o["info"]=slowdns_info()
             comps[k]=o
     finally:
         c.close()
@@ -1487,12 +1557,31 @@ def vaydns_config():
     dom=str(d.get("domain","")).strip().lower()
     if dom and not DOMAIN_RE.match(dom):
         return err("bad_domain")
-    if dom and dom==get("domain",""):
+    if dom and dom in (get("domain",""),slowdns_domain()):
         return err("domain_same")
     if not comp_installed("vaydns"):
         return err("not_found",404)
     with LOCK:
         put("vaydns_domain",dom)
+        c=db()
+        try:
+            apply_components(c)
+        finally:
+            c.close()
+    return jsonify(ok=True)
+@app.post("/api/slowdns/config")
+@auth
+def slowdns_config():
+    d=request.get_json(silent=True) or {}
+    dom=str(d.get("domain","")).strip().lower()
+    if dom and not DOMAIN_RE.match(dom):
+        return err("bad_domain")
+    if dom and dom in (get("domain",""),vaydns_domain()):
+        return err("domain_same")
+    if not comp_installed("slowdns"):
+        return err("not_found",404)
+    with LOCK:
+        put("slowdns_domain",dom)
         c=db()
         try:
             apply_components(c)
@@ -1515,7 +1604,7 @@ def comp_action(comp,action):
         off=combos_off()-set(comp_combos(comp))
         put("combos_off",",".join(sorted(off)))
     cmd=": > %s; bash %s/components.sh %s %s >>%s 2>&1"%(shq(LOGF),shq(BASE),action,comp,shq(LOGF))
-    if comp in ("xray","vaydns") and action=="install":
+    if comp in ("xray","vaydns","slowdns") and action=="install":
         cmd+=" && systemctl restart vpnpanel"
     e=start_job("component",cmd)
     if e:
@@ -1541,6 +1630,11 @@ def dns_head():
     pub=vaydns_pub()
     ip=get("server_ip","") or host()
     return [{"k":"dns_domain","value":td or "-","rows":1},{"k":"dns_pubkey","value":pub or "-","rows":2},{"k":"dns_cmd","value":"vaydns-client -udp %s:%d -pubkey %s -domain %s -listen 127.0.0.1:%d"%(ip,VAYDNS_PORT,pub or "PUBKEY",td or "DOMAIN",VAYDNS_LOCAL),"rows":4}]
+def slowdns_head():
+    td=slowdns_domain()
+    pub=slowdns_pub()
+    ip=get("server_ip","") or host()
+    return [{"k":"dns_domain","value":td or "-","rows":1},{"k":"dns_pubkey","value":pub or "-","rows":2},{"k":"sdns_cmd","value":"dnstt-client -udp %s:%d -pubkey %s %s 127.0.0.1:%d"%(ip,VAYDNS_PORT,pub or "PUBKEY",td or "DOMAIN",SLOWDNS_LOCAL),"rows":4}]
 def vmess_link(n,s,dom,tls,grpc=False,dns=False):
     o={"v":"2","ps":n+("-DNS" if dns else "")+("-TLS" if tls else "-80"),"add":"127.0.0.1" if dns else dom,"port":str(VAYDNS_LOCAL) if dns else "443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"grpc" if grpc else "ws","type":"gun" if grpc else "none","host":"" if grpc else dom,"path":"vmess-grpc" if grpc else "/vmess","tls":"tls" if tls else "","sni":dom if tls else "","alpn":"h2" if grpc and tls else ""}
     return "vmess://"+base64.b64encode(json.dumps(o,separators=(",",":")).encode()).decode()
@@ -1570,6 +1664,17 @@ def info(name):
             items.append({"k":"dns_ssh_tls","value":ad,"rows":2})
         if r["tls"] in ("plain","both"):
             items.append({"k":"dns_ssh_plain","value":ad,"rows":2})
+        if want_tls:
+            items.append({"k":"sni","value":dom,"rows":1})
+        items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+    elif p=="ssh" and r["transport"]=="slowdns":
+        items=slowdns_head()
+        want_tls=t_on and r["tls"] in ("tls","both")
+        ad="127.0.0.1:%d@%s:%s"%(SLOWDNS_LOCAL,n,s)
+        if want_tls:
+            items.append({"k":"sdns_ssh_tls","value":ad,"rows":2})
+        if r["tls"] in ("plain","both"):
+            items.append({"k":"sdns_ssh_plain","value":ad,"rows":2})
         if want_tls:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
@@ -1620,7 +1725,7 @@ def info(name):
     cn=CONN.get(n,{})
     act=is_live(n,r["proto"],r["status"],cn.get("n",0))
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"],dns_ok=bool(vaydns_domain() and vaydns_pub()))
+    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
 def parse_common(d,creating):
     try:
         out={}
@@ -1672,6 +1777,8 @@ def create():
         return err("bad_values")
     transport=d.get("transport","ws")
     if transport not in TRANSPORTS:
+        return err("bad_values")
+    if proto!="ssh" and transport=="slowdns":
         return err("bad_values")
     if proto!="ssh":
         transport=transport if transport in ("grpc","dns") else "ws"
@@ -1756,7 +1863,7 @@ def edit(name):
                     return err("bad_values")
                 sets["tls"]=d["tls"]
             if d.get("transport"):
-                okt=V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","udp","dns")
+                okt=V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","udp","dns","slowdns")
                 if d["transport"] not in okt:
                     return err("bad_values")
                 sets["transport"]=d["transport"]

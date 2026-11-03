@@ -8,6 +8,9 @@ WEB_PLAIN_H2=int(os.environ.get("MUX_WEB_PLAIN_H2","10081"))
 WEB_TLS_H2=int(os.environ.get("MUX_WEB_TLS_H2","10442"))
 DNS_PORT=int(os.environ.get("MUX_DNS_PORT","10053"))
 DNS_TLS_FRONT=int(os.environ.get("MUX_DNS_TLS_FRONT","443"))
+DNS_UDP=int(os.environ.get("MUX_DNS_UDP","5302"))
+DNS_ZONES=os.environ.get("MUX_DNS_ZONES","/etc/vpnpanel/dnszones")
+DNS_DEFAULT=int(os.environ.get("MUX_DNS_DEFAULT","5300"))
 LOCAL=("-","127.0.0.1","::1")
 SNIFF=float(os.environ.get("MUX_SNIFF","2"))
 MAXC=150
@@ -159,6 +162,134 @@ async def handle(cr,cw,tls,dns=False):
                 CONN.pop(ip,None)
             if time.time()-t0<5:
                 strike(ip)
+ZONES=[]
+ZSTATE={"chk":0.0,"mt":None}
+def load_zones():
+    now=time.time()
+    if now-ZSTATE["chk"]<2:
+        return
+    ZSTATE["chk"]=now
+    try:
+        mt=os.stat(DNS_ZONES).st_mtime
+    except OSError:
+        mt=-1
+    if mt==ZSTATE["mt"]:
+        return
+    ZSTATE["mt"]=mt
+    z=[]
+    try:
+        with open(DNS_ZONES) as f:
+            for l in f:
+                p=l.split()
+                if len(p)==2 and p[1].isdigit() and 0<int(p[1])<65536:
+                    z.append((p[0].lower().strip("."),int(p[1])))
+    except OSError:
+        pass
+    z.sort(key=lambda x:-len(x[0]))
+    ZONES[:]=z
+def dns_qname(d):
+    if len(d)<17 or d[2]&0x80 or ((d[4]<<8)|d[5])<1:
+        return None
+    i=12
+    out=[]
+    while i<len(d):
+        n=d[i]
+        if n==0:
+            return b".".join(out).decode("ascii","ignore").lower()
+        if n&0xC0 or i+1+n>len(d):
+            return None
+        out.append(d[i+1:i+1+n])
+        i+=1+n
+    return None
+def dns_route(d):
+    load_zones()
+    if ZSTATE["mt"]==-1:
+        return DNS_DEFAULT
+    name=dns_qname(d)
+    if not name:
+        return None
+    for dom,port in ZONES:
+        if name==dom or name.endswith("."+dom):
+            return port
+    return None
+class DnsFront:
+    """UDP 53 is redirected here (nft). Each query goes to the tunnel server that owns its domain."""
+    def __init__(self,loop):
+        self.loop=loop
+        self.flows={}
+        s=None
+        try:
+            s=socket.socket(socket.AF_INET6,socket.SOCK_DGRAM)
+            s.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,0)
+            s.bind(("::",DNS_UDP))
+        except OSError:
+            if s:
+                s.close()
+            s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+            s.bind(("0.0.0.0",DNS_UDP))
+        s.setblocking(False)
+        self.s=s
+        loop.add_reader(s.fileno(),self.on_query)
+    def on_query(self):
+        for _ in range(128):
+            try:
+                d,addr=self.s.recvfrom(4096)
+            except (BlockingIOError,InterruptedError):
+                return
+            except OSError:
+                return
+            port=dns_route(d)
+            if not port:
+                continue
+            key=(addr,port)
+            fl=self.flows.get(key)
+            if fl is None:
+                if len(self.flows)>=4096:
+                    self.drop(min(self.flows,key=lambda k:self.flows[k][1]))
+                try:
+                    u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+                    u.setblocking(False)
+                    u.connect(("127.0.0.1",port))
+                except OSError:
+                    continue
+                fl=[u,0.0]
+                self.flows[key]=fl
+                self.loop.add_reader(u.fileno(),self.on_reply,key)
+            fl[1]=time.time()
+            try:
+                fl[0].send(d)
+            except OSError:
+                pass
+    def on_reply(self,key):
+        fl=self.flows.get(key)
+        if fl is None:
+            return
+        for _ in range(64):
+            try:
+                d=fl[0].recv(65535)
+            except (BlockingIOError,InterruptedError):
+                return
+            except OSError:
+                return
+            fl[1]=time.time()
+            try:
+                self.s.sendto(d,key[0])
+            except OSError:
+                pass
+    def drop(self,key):
+        fl=self.flows.pop(key,None)
+        if fl:
+            try:
+                self.loop.remove_reader(fl[0].fileno())
+            except Exception:
+                pass
+            fl[0].close()
+    async def gc(self):
+        while True:
+            await asyncio.sleep(30)
+            now=time.time()
+            for k in [k for k,v in self.flows.items() if now-v[1]>90]:
+                self.drop(k)
 async def main():
     servers=[]
     for host in ("0.0.0.0","::"):
@@ -170,5 +301,10 @@ async def main():
             print("IPv6 listener skipped:",e,file=sys.stderr)
     servers.append(await asyncio.start_server(lambda r,w:handle(r,w,True),"127.0.0.1",TLS_PORT,backlog=1024))
     servers.append(await asyncio.start_server(lambda r,w:handle(r,w,False,True),"127.0.0.1",DNS_PORT,backlog=1024))
+    try:
+        df=DnsFront(asyncio.get_running_loop())
+        asyncio.get_running_loop().create_task(df.gc())
+    except OSError as e:
+        print("DNS front skipped:",e,file=sys.stderr)
     await asyncio.gather(*(s.serve_forever() for s in servers))
 asyncio.run(main())
