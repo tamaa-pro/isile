@@ -23,7 +23,7 @@ echo " Domain    : ${d:-not set (server address, no TLS)}"
 echo " Server IP : ${ip:-unknown}"
 if [ -n "$d" ]; then echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel, HTTPS)"; else echo " Ports     : 80 (no TLS) | 2080 (panel, HTTP)"; fi
 if [ -n "$d" ]; then echo " SSH SSL   : direct SSH on 80 (no TLS) and 443 (TLS via stunnel)"; else echo " SSH SSL   : direct SSH on 80 (no TLS)"; fi
-echo " Paths     : /vless /vmess /trojan (WS), vless-grpc vmess-grpc trojan-grpc (gRPC), any other path = SSH WebSocket"
+echo " Paths     : /vless /vmess /trojan (WS), vless-grpc vmess-grpc trojan-grpc (gRPC), vless-xhttp vmess-xhttp trojan-xhttp (XHTTP), any other path = SSH WebSocket"
 if [ -f /etc/systemd/system/vaydns.service ]; then echo " VayDNS    : UDP 53 | tunnel domain: $(dbget vaydns_domain | grep . || echo 'not set (set it in the panel)')"; fi
 if [ -f /etc/systemd/system/slowdns.service ]; then echo " SlowDNS   : UDP 53 | tunnel domain: $(dbget slowdns_domain | grep . || echo 'not set (set it in the panel)')"; fi
 echo " Services  :"

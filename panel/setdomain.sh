@@ -1,15 +1,29 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 APP=/opt/vpnpanel
+DATA=/var/lib/vpnpanel
+dbget(){ python3 -c 'import sqlite3,sys;r=sqlite3.connect(sys.argv[1],timeout=10).execute("SELECT v FROM settings WHERE k=?",(sys.argv[2],)).fetchone();print(r[0] if r else "")' "$DATA/panel.db" "$1" 2>/dev/null || true; }
 LOG=/var/log/isile-install.log
 [ "$(id -u)" -eq 0 ] || { echo "run as root"; exit 1; }
 render(){
-local d="${1:-}" tls=0 LST SSL HSTS PROTO WS SSHWS RIP GRPC_COMMON
+local d="${1:-}" tls=0 LST SSL HSTS PROTO WS SSHWS RIP GRPC_COMMON XH DON DURL DECOY DRE
 if [ -n "$d" ] && [ -s "/etc/letsencrypt/live/$d/fullchain.pem" ]; then tls=1; fi
 WS='proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $remote_addr; proxy_read_timeout 1d; proxy_send_timeout 1d; proxy_buffering off;'
-SSHWS='if ($http_upgrade = "") { return 404; } limit_req zone=vpnws burst=40 nodelay; limit_conn vpnconn 100; proxy_pass http://127.0.0.1:10022;'
+# What a plain visitor (browser, curl) gets from the domain: nothing by default (connection closed, 444).
+# Optional: classic 404 page, or a redirect to a decoy site. Chosen in the panel (decoy_on / decoy_url).
+DON="$(dbget decoy_on)"
+DURL="$(dbget decoy_url)"
+DRE='^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&:@+-]*)?$'
+DECOY='return 444;'
+if [ "$DON" = 1 ]; then
+DECOY='return 404;'
+if [ -n "$DURL" ] && [ "${#DURL}" -le 300 ] && [[ "$DURL" =~ $DRE ]]; then DECOY="return 302 $DURL;"; fi
+fi
+SSHWS='if ($http_upgrade = "") { '"$DECOY"' } limit_req zone=vpnws burst=40 nodelay; limit_conn vpnconn 100; proxy_pass http://127.0.0.1:10022;'
 RIP='set_real_ip_from 127.0.0.1; real_ip_header proxy_protocol;'
 GRPC_COMMON='client_max_body_size 0; client_body_timeout 1d; grpc_read_timeout 1d; grpc_send_timeout 1d; grpc_socket_keepalive on; grpc_set_header X-Real-IP $remote_addr;'
+# XHTTP: HTTP/1.1 clients go through proxy_pass without buffering, HTTP/2 clients through grpc_pass (same as gRPC, recommended by Xray)
+XH='proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $remote_addr; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; client_body_timeout 1d; proxy_read_timeout 1d; proxy_send_timeout 1d;'
 LST='listen 2080; listen [::]:2080;'
 SSL=""
 HSTS=""
@@ -21,6 +35,7 @@ HSTS='add_header Strict-Transport-Security "max-age=31536000" always;'
 PROTO=https
 fi
 rm -f /etc/nginx/sites-enabled/default
+if [ -f /etc/nginx/conf.d/vpnpanel.conf ]; then cp -f /etc/nginx/conf.d/vpnpanel.conf /etc/nginx/conf.d/vpnpanel.conf.bak; fi
 {
 cat <<EOT
 limit_req_zone \$binary_remote_addr zone=vpnlogin:10m rate=5r/s;
@@ -32,6 +47,9 @@ $RIP
 server_name _;
 server_tokens off;
 location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
+location ^~ /vless-xhttp { proxy_pass http://127.0.0.1:10211; $XH }
+location ^~ /vmess-xhttp { proxy_pass http://127.0.0.1:10213; $XH }
+location ^~ /trojan-xhttp { proxy_pass http://127.0.0.1:10212; $XH }
 location ^~ /vless { proxy_pass http://127.0.0.1:10011; $WS }
 location ^~ /vmess { proxy_pass http://127.0.0.1:10013; $WS }
 location ^~ /trojan { proxy_pass http://127.0.0.1:10012; $WS }
@@ -46,7 +64,10 @@ $GRPC_COMMON
 location ^~ /vless-grpc { grpc_pass grpc://127.0.0.1:10111; }
 location ^~ /vmess-grpc { grpc_pass grpc://127.0.0.1:10113; }
 location ^~ /trojan-grpc { grpc_pass grpc://127.0.0.1:10112; }
-location / { return 404; }
+location ^~ /vless-xhttp { grpc_pass grpc://127.0.0.1:10211; }
+location ^~ /vmess-xhttp { grpc_pass grpc://127.0.0.1:10213; }
+location ^~ /trojan-xhttp { grpc_pass grpc://127.0.0.1:10212; }
+location / { $DECOY }
 }
 EOT
 if [ "$tls" = 1 ]; then
@@ -56,6 +77,9 @@ listen 127.0.0.1:10443 proxy_protocol;
 $RIP
 server_name _;
 server_tokens off;
+location ^~ /vless-xhttp { proxy_pass http://127.0.0.1:10201; $XH }
+location ^~ /vmess-xhttp { proxy_pass http://127.0.0.1:10203; $XH }
+location ^~ /trojan-xhttp { proxy_pass http://127.0.0.1:10202; $XH }
 location ^~ /vless { proxy_pass http://127.0.0.1:10001; $WS }
 location ^~ /vmess { proxy_pass http://127.0.0.1:10003; $WS }
 location ^~ /trojan { proxy_pass http://127.0.0.1:10002; $WS }
@@ -70,7 +94,10 @@ $GRPC_COMMON
 location ^~ /vless-grpc { grpc_pass grpc://127.0.0.1:10101; }
 location ^~ /vmess-grpc { grpc_pass grpc://127.0.0.1:10103; }
 location ^~ /trojan-grpc { grpc_pass grpc://127.0.0.1:10102; }
-location / { return 404; }
+location ^~ /vless-xhttp { grpc_pass grpc://127.0.0.1:10201; }
+location ^~ /vmess-xhttp { grpc_pass grpc://127.0.0.1:10203; }
+location ^~ /trojan-xhttp { grpc_pass grpc://127.0.0.1:10202; }
+location / { $DECOY }
 }
 EOT
 fi
@@ -114,7 +141,11 @@ chmod 600 /etc/vpnpanel/stunnel.conf
 else
 rm -f /etc/vpnpanel/stunnel.conf
 fi
-nginx -t
+if ! nginx -t; then
+if [ -f /etc/nginx/conf.d/vpnpanel.conf.bak ]; then mv -f /etc/nginx/conf.d/vpnpanel.conf.bak /etc/nginx/conf.d/vpnpanel.conf; fi
+return 1
+fi
+rm -f /etc/nginx/conf.d/vpnpanel.conf.bak
 }
 apply(){
 local d="${1:-}" e="${2:-}"

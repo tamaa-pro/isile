@@ -17,6 +17,8 @@ LOGF="/var/log/isile-install.log"
 BANNER_TXT="/etc/vpnpanel/banner.txt"
 BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
 BANNER_MAX=2000
+DECOY_RE=re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&:@+-]*)?$")
+DECOY_MAX=300
 LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"slowdns":("unit",["slowdns"])}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
@@ -27,8 +29,8 @@ GB=1073741824
 V2=("vless","vmess","trojan")
 PROTOS=("ssh",)+V2
 MODES=("tls","plain")
-TRANSPORTS=("ws","ssl","udp","grpc","dns","slowdns")
-V2NETS=("ws","grpc")
+TRANSPORTS=("ws","ssl","udp","grpc","xhttp","dns","slowdns")
+V2NETS=("ws","grpc","xhttp")
 UNITDIR="/etc/systemd/system"
 UDPC_DIR="/usr/local/lib/isile/udp-custom"
 UDPC_BIN=UDPC_DIR+"/udp-custom"
@@ -56,6 +58,7 @@ COMBO_REQ={"vlessdns":"xray","vmessdns":"xray","trojandns":"xray"}
 COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns","slowdns":"slowdns"}
 REMOVABLE=("wsbridge","udpcustom","xray","vaydns","slowdns")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
+XPORTS={("vless","tls"):10201,("trojan","tls"):10202,("vmess","tls"):10203,("vless","plain"):10211,("trojan","plain"):10212,("vmess","plain"):10213}
 GPORTS={("vless","tls"):10101,("trojan","tls"):10102,("vmess","tls"):10103,("vless","plain"):10111,("trojan","plain"):10112,("vmess","plain"):10113}
 NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
@@ -645,9 +648,12 @@ def xray_conf(c):
                 if net=="ws":
                     ss={"network":"ws","wsSettings":{"path":"/"+p}}
                     tag,port=p+"-"+m,PORTS[(p,m)]
-                else:
+                elif net=="grpc":
                     ss={"network":"grpc","grpcSettings":{"serviceName":p+"-grpc"}}
                     tag,port=p+"-"+m+"-grpc",GPORTS[(p,m)]
+                else:
+                    ss={"network":"xhttp","xhttpSettings":{"path":"/"+p+"-xhttp","mode":"auto"}}
+                    tag,port=p+"-"+m+"-xhttp",XPORTS[(p,m)]
                 inb.append({"tag":tag,"listen":"127.0.0.1","port":port,"protocol":p,"settings":st,"streamSettings":ss})
     return {
         "log":{"access":"none","loglevel":"warning"},
@@ -1180,7 +1186,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"banner":get("banner",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list()}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"banner":get("banner",""),"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1222,6 +1228,14 @@ def settings_set():
         upd["tz_utc"]="1" if d["tz_utc"] else "0"
     if "public_page" in d:
         upd["public_page"]="1" if d["public_page"] else "0"
+    dy={}
+    if "decoy_on" in d:
+        dy["decoy_on"]="1" if d["decoy_on"] else "0"
+    if "decoy_url" in d:
+        u=str(d["decoy_url"] or "").strip()
+        if u and (len(u)>DECOY_MAX or not DECOY_RE.match(u)):
+            return err("bad_decoy_url")
+        dy["decoy_url"]=u
     if "banner" in d:
         txt=clean_banner(d["banner"])
         if txt is None:
@@ -1232,7 +1246,27 @@ def settings_set():
         upd["banner"]=txt
     if upd:
         puts(upd)
+    if dy:
+        old={k:get(k,"") for k in dy}
+        puts(dy)
+        e=decoy_apply()
+        if e:
+            puts(old)
+            decoy_apply()
+            return err("system",400,e)
     return jsonify(ok=True)
+def decoy_apply():
+    """Re-render the nginx config (it reads decoy_on / decoy_url from the database) and reload nginx."""
+    try:
+        r=sh(["bash",BASE+"/setdomain.sh","--render",get("domain","")])
+        if r.returncode:
+            return ((r.stderr or r.stdout or "nginx").strip()[-300:])
+        r=sh(["systemctl","reload","nginx"])
+        if r.returncode:
+            return ((r.stderr or r.stdout or "nginx reload").strip()[-300:])
+    except Exception as e:
+        return str(e)[:300]
+    return ""
 def clean_banner(v):
     if not isinstance(v,str):
         return None
@@ -1635,8 +1669,8 @@ def slowdns_head():
     pub=slowdns_pub()
     ip=get("server_ip","") or host()
     return [{"k":"dns_domain","value":td or "-","rows":1},{"k":"dns_pubkey","value":pub or "-","rows":2},{"k":"sdns_cmd","value":"dnstt-client -udp %s:%d -pubkey %s %s 127.0.0.1:%d"%(ip,VAYDNS_PORT,pub or "PUBKEY",td or "DOMAIN",SLOWDNS_LOCAL),"rows":4}]
-def vmess_link(n,s,dom,tls,grpc=False,dns=False):
-    o={"v":"2","ps":n+("-DNS" if dns else "")+("-TLS" if tls else "-80"),"add":"127.0.0.1" if dns else dom,"port":str(VAYDNS_LOCAL) if dns else "443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"grpc" if grpc else "ws","type":"gun" if grpc else "none","host":"" if grpc else dom,"path":"vmess-grpc" if grpc else "/vmess","tls":"tls" if tls else "","sni":dom if tls else "","alpn":"h2" if grpc and tls else ""}
+def vmess_link(n,s,dom,tls,grpc=False,dns=False,xhttp=False):
+    o={"v":"2","ps":n+("-DNS" if dns else "")+("-TLS" if tls else "-80"),"add":"127.0.0.1" if dns else dom,"port":str(VAYDNS_LOCAL) if dns else "443" if tls else "80","id":s,"aid":"0","scy":"auto","net":"grpc" if grpc else "xhttp" if xhttp else "ws","type":"gun" if grpc else "auto" if xhttp else "none","host":"" if grpc else dom,"path":"vmess-grpc" if grpc else "/vmess-xhttp" if xhttp else "/vmess","tls":"tls" if tls else "","sni":dom if tls else "","alpn":"h2" if (grpc or xhttp) and tls else ""}
     return "vmess://"+base64.b64encode(json.dumps(o,separators=(",",":")).encode()).decode()
 @app.get("/api/accounts/<name>/info")
 @auth
@@ -1702,16 +1736,19 @@ def info(name):
             if tls and not t_on:
                 continue
             grpc=r["transport"]=="grpc"
+            xhttp=r["transport"]=="xhttp"
             tail=h+("-DNS" if dns else "")+("-TLS" if tls else "-80")
             addr="127.0.0.1" if dns else dom
             port=VAYDNS_LOCAL if dns else 443 if tls else 80
-            sec="sni=%s&fp=chrome&%s"%(dom,"alpn=h2&" if grpc else "") if tls else ""
+            sec="sni=%s&fp=chrome&%s"%(dom,"alpn=h2&" if (grpc or xhttp) else "") if tls else ""
             if grpc:
                 net="type=grpc&serviceName=%s-grpc&mode=gun"%p
+            elif xhttp:
+                net="type=xhttp&host=%s&path=%%2F%s-xhttp&mode=auto"%(dom,p)
             else:
                 net="type=ws&host=%s&path=%%2F%s"%(dom,p)
             if p=="vmess":
-                v=vmess_link(n,s,dom,tls,grpc,dns)
+                v=vmess_link(n,s,dom,tls,grpc,dns,xhttp)
             elif p=="vless":
                 v="vless://%s@%s:%d?encryption=none&security=%s&%s%s#%s"%(s,addr,port,"tls" if tls else "none",sec,net,tail)
             else:
@@ -1720,6 +1757,8 @@ def info(name):
         items.append({"k":"pass" if p=="trojan" else "uuid","value":s,"rows":1})
         if r["transport"]=="grpc":
             items.append({"k":"grpc_service","value":p+"-grpc","rows":1})
+        if r["transport"]=="xhttp":
+            items.append({"k":"xhttp_path","value":"/"+p+"-xhttp","rows":1})
     if public_on():
         items.insert(0,{"k":"page","value":page_url(n),"rows":1})
     cn=CONN.get(n,{})
@@ -1781,8 +1820,8 @@ def create():
     if proto!="ssh" and transport=="slowdns":
         return err("bad_values")
     if proto!="ssh":
-        transport=transport if transport in ("grpc","dns") else "ws"
-    elif transport=="grpc":
+        transport=transport if transport in ("grpc","xhttp","dns") else "ws"
+    elif transport in ("grpc","xhttp"):
         return err("bad_values")
     if transport=="udp":
         tls="plain"
