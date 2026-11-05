@@ -81,53 +81,20 @@ read -rp "Continue anyway? [y/N]: " YN </dev/tty
 fi
 fi
 STEP="optional components"
-if [ "${ISILE_UDPC:-}" = yes ]; then
-UDPC=yes
-elif [ -z "${ISILE_UDPC:-}" ]; then
-echo
-echo "=================================================="
-echo "  Optional: UDP Custom (SSH over UDP)"
-echo "=================================================="
-echo " SECURITY WARNING"
-echo " UDP Custom is a third-party CLOSED-SOURCE binary (by ePro Dev Team). Its code"
-echo " cannot be reviewed, and it is NOT part of this repository or written by it."
-echo " It will be downloaded from the upstream repository (branch main, not pinned):"
-echo "   ${UDPC_URL:-https://github.com/http-custom/udp-custom/raw/main/bin/udp-custom-linux-amd64}"
-echo " The upstream publishes no checksum, so you are trusting whoever controls that"
-echo " repository, and the binary may change over time. To limit the risk, it runs as an"
-echo " unprivileged user, sandboxed, and any NEW outbound connection it tries to"
-echo " open (except to the local SSH server) is blocked by the firewall."
-echo " You can remove it at any time from the panel: Settings > Components."
-read -rp "Install UDP Custom together with the other services? [y/N]: " YN </dev/tty
-if [[ "$YN" =~ ^[Yy]$ ]]; then UDPC=yes; fi
-fi
+# Optional components (UDP Custom, VayDNS, SlowDNS) are never asked about here: the installer sets up the essentials only and
+# they are installed from the panel when needed (Settings > Components). Unattended installs can still request them with
+# ISILE_UDPC=yes, ISILE_VAYDNS=yes and ISILE_VAYDNS_DOMAIN=t.example.com.
+if [ "${ISILE_UDPC:-}" = yes ]; then UDPC=yes; fi
 if [ "$UDPC" = yes ] && [ "$(uname -m)" != x86_64 ] && [ -z "${UDPC_URL:-}" ]; then
 echo "UDP Custom has no default binary for $(uname -m), skipping it (set UDPC_URL to use your own)."
 UDPC=no
 fi
-if [ "${ISILE_VAYDNS:-}" = yes ]; then
-VAYDNS=yes
-elif [ -z "${ISILE_VAYDNS:-}" ]; then
-echo
-echo "=================================================="
-echo "  Optional: VayDNS (SSH and V2Ray over a DNS tunnel)"
-echo "=================================================="
-echo " Open source (net2share/vaydns), downloaded from its GitHub release and verified"
-echo " against the SHA-256 published with it. It needs a tunnel domain whose NS record"
-echo " points at this server, and UDP port 53 open in the cloud firewall."
-echo " You can also install or remove it later from the panel: Settings > Components."
-read -rp "Install VayDNS together with the other services? [y/N]: " YN </dev/tty
-if [[ "$YN" =~ ^[Yy]$ ]]; then VAYDNS=yes; fi
-fi
+if [ "${ISILE_VAYDNS:-}" = yes ]; then VAYDNS=yes; fi
 if [ "$VAYDNS" = yes ]; then
 case "$(uname -m)" in x86_64|aarch64) ;; *) echo "VayDNS has no binary for $(uname -m), skipping it."; VAYDNS=no;; esac
 fi
 if [ "$VAYDNS" = yes ]; then
-VAYDNS_DOM="${ISILE_VAYDNS_DOMAIN:-}"
-if [ -z "$VAYDNS_DOM" ] && [ -z "${ISILE_VAYDNS:-}" ]; then
-read -rp "VayDNS tunnel domain (e.g. t.example.com, Enter to set it later in the panel): " VAYDNS_DOM </dev/tty
-fi
-VAYDNS_DOM="$(echo "$VAYDNS_DOM" | tr 'A-Z' 'a-z' | tr -d ' ')"
+VAYDNS_DOM="$(echo "${ISILE_VAYDNS_DOMAIN:-}" | tr 'A-Z' 'a-z' | tr -d ' ')"
 if [ -n "$VAYDNS_DOM" ]; then
 [[ "$VAYDNS_DOM" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid tunnel domain: $VAYDNS_DOM"
 [ "$VAYDNS_DOM" != "$DOMAIN" ] || die "the VayDNS tunnel domain must be different from the panel domain"
@@ -343,6 +310,9 @@ fi
 elif [ -x /usr/local/lib/isile/vaydns/vaydns-server ]; then
 bash "$APP/panel/components.sh" refresh vaydns >>"$LOG" 2>&1 || echo "Warning: could not refresh the VayDNS service files (see $LOG)"
 fi
+if [ -x /usr/local/lib/isile/slowdns/vaydns-server ]; then
+bash "$APP/panel/components.sh" refresh slowdns >>"$LOG" 2>&1 || echo "Warning: could not refresh the SlowDNS service files (see $LOG)"
+fi
 STEP="starting services and firewall"
 echo "[8/8] Starting services"
 L ufw allow "$SSH_PORT/tcp"
@@ -363,6 +333,7 @@ L systemctl restart nginx
 L systemctl restart vpnmux
 if [ -f /etc/systemd/system/udp-custom.service ]; then L systemctl try-restart udp-custom; fi
 if [ -f /etc/systemd/system/vaydns.service ]; then L systemctl try-restart vaydns; fi
+if [ -f /etc/systemd/system/slowdns.service ]; then L systemctl try-restart slowdns; fi
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 L systemctl enable vpnstunnel
 L systemctl restart vpnstunnel
@@ -377,7 +348,9 @@ UDPON=no
 case " $SVCS " in *" udp-custom "*) UDPON=yes;; esac
 VAYON=no
 case " $SVCS " in *" vaydns "*) VAYON=yes;; esac
-SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /; s/ vaydns / /')"
+SLOWON=no
+case " $SVCS " in *" slowdns "*) SLOWON=yes;; esac
+SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /; s/ vaydns / /; s/ slowdns / /')"
 for s in $SVCS; do
 ok=0
 for i in $(seq 1 20); do
@@ -396,6 +369,10 @@ fi
 if [ "$VAYON" = yes ] && ! systemctl is-active --quiet vaydns; then
 journalctl -u vaydns -n 12 --no-pager >>"$LOG" 2>&1 || true
 echo "Warning: VayDNS is not running (optional component, see $LOG). You can remove it from Settings > Components."
+fi
+if [ "$SLOWON" = yes ] && ! systemctl is-active --quiet slowdns; then
+journalctl -u slowdns -n 12 --no-pager >>"$LOG" 2>&1 || true
+echo "Warning: SlowDNS is not running (optional component, see $LOG). You can remove it from Settings > Components."
 fi
 STEP="verifying connection paths"
 CODE=000
@@ -462,6 +439,7 @@ echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS). TLS needs a domain."
 echo " You can add a domain later from the panel Settings."
 fi
+echo " Optional services (UDP Custom, VayDNS, SlowDNS, ...) are not installed by default: add them from the panel, Settings > Components."
 if systemctl is-active --quiet udp-custom; then
 echo " UDP Custom is running: also open its UDP port (default 36712) in the cloud firewall."
 echo " It can be removed any time from Settings > Components in the panel."
