@@ -350,7 +350,7 @@ if(!S){try{await loadStats()}catch(e){}}
 const ed=!!a;
 const tlsOn=!S||S.tls_on!==false;
 const forced=!tlsOn&&!ed;
-const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',transport:ed&&a.proto==='ssh'?(a.transport||'ws'):'ws',net:ed&&a.proto!=='ssh'&&(a.transport==='grpc'||a.transport==='dns')?a.transport:'ws',tls:forced?'plain':ed?a.tls:'both'};
+const st={kind:ed?(a.proto==='ssh'?'ssh':'v2'):'ssh',proto:ed?a.proto:'vless',transport:ed&&a.proto==='ssh'?(a.transport||'ws'):'ws',net:ed&&a.proto!=='ssh'&&(a.transport==='grpc'||a.transport==='xhttp'||a.transport==='dns')?a.transport:'ws',tls:forced?'plain':ed?a.tls:'both'};
 const name=el('input',{placeholder:'user1',maxlength:20,autocomplete:'off',dir:'ltr',value:ed?a.name:''});
 if(ed)name.disabled=true;
 const secret=el('input',{autocomplete:'off',dir:'ltr',placeholder:ed?t('f_keep'):t('f_auto')});
@@ -386,8 +386,9 @@ const kindSeg=seg(kindOpts(),st.kind,v=>{st.kind=v;sync()});
 const protoSeg=seg(protoOpts(),st.proto,v=>{st.proto=v;sync()});
 const tlsSeg=seg(tlsOpts(),st.tls,v=>{st.tls=v});tlsSeg.classList.add('s3');
 const transportSeg=seg(trOpts(),st.transport,v=>{st.transport=v;sync()});transportSeg.classList.add('sq5');
-const netOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'grpc',l:t('tr_grpc'),i:'network-wired'},{v:'dns',l:t('tr_dns'),i:'satellite-dish',dis:!netOk('dns')}];
+const netOpts=()=>[{v:'ws',l:t('tr_ws'),i:'globe'},{v:'grpc',l:t('tr_grpc'),i:'network-wired'},{v:'xhttp',l:t('tr_xhttp'),i:'arrows-left-right'},{v:'dns',l:t('tr_dns'),i:'satellite-dish',dis:!netOk('dns')}];
 const netSeg=seg(netOpts(),st.net,v=>{st.net=v;sync()});
+netSeg.classList.add('sq4');
 const tlsHint=el('div',{class:'hint'},ic('triangle-exclamation'),t('tls_unavailable'));
 const unav=el('div',{class:'hint'},ic('circle-info'),t('f_unavail_hint'));
 const secLabel=el('span',{});
@@ -582,6 +583,14 @@ const doReset=()=>ask(t('sys_reset_confirm'),t('sys_reset'),async()=>{
 try{await api('POST','/api/system/reset',{password:pwr.value})}catch(e){terr(e);return false}
 toast(t('sys_reset_done'));setTimeout(()=>location.reload(),900)
 },{extra:pwr});
+let dyOn=!!s.decoy_on;
+const dyUrl=el('input',{type:'text',dir:'ltr',maxlength:300,placeholder:'https://example.com',value:s.decoy_url||''});
+const dyBox=el('div',{class:'tzbox'},dyUrl);
+const dyApply=()=>{dyBox.classList.toggle('dis',!dyOn);dyUrl.disabled=!dyOn};
+dyApply();
+const saveDy=async b=>{try{await api('POST','/api/settings',b);toast(t('dy_saved'))}catch(e){terr(e);return false}return true};
+const dySw=sw(dyOn,async v=>{dyOn=v;dyApply();await saveDy({decoy_on:v})});
+const dySave=el('div',{class:'row'},btn(t('save'),'floppy-disk',async()=>{await saveDy({decoy_on:dyOn,decoy_url:dyUrl.value.trim()})},'pri'));
 const bn=el('textarea',{rows:5,maxlength:2000,dir:'auto',placeholder:t('bn_ph')});
 bn.value=s.banner||'';
 const saveBn=async(v)=>{try{await api('POST','/api/settings',{banner:v});if(v==='')bn.value='';toast(t('bn_saved'))}catch(e){terr(e)}};
@@ -602,7 +611,8 @@ themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}],SPU,v=>{setSpu(v);toast(t('done'))}),t('s_speed_hint')),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
-el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))))),
+el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
+el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
 panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')))),
 panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
