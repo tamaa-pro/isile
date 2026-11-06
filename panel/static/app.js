@@ -361,6 +361,8 @@ const expF=dtField(startD);
 const quota=el('input',{type:'number',min:0,step:'any',value:ed&&a.quota?+(a.quota/GB).toFixed(3):0});
 const connLim=el('input',{type:'number',min:0,max:1000,step:1,value:ed?(a.conn_limit||0):0});
 const connHint=el('small',{class:'muted'});
+let pub=ed?!!a.public:false;
+const pubSw=sw(pub,v=>{pub=v});
 const note=el('input',{maxlength:100,value:ed?a.note:''});
 const genName=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{name.value='u'+rnd(6).toLowerCase()}},ic('dice'));
 const genSec=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{secret.value=(st.kind==='v2'&&st.proto!=='trojan')?crypto.randomUUID():rnd(14)}},ic('dice'));
@@ -424,6 +426,7 @@ el('label',{class:'f'},secLabel,el('div',{class:'inp-row'},secret,genSec)),
 el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],expF),el('small',{class:'muted'},t('f_exp_hint'))),
 el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota)),
 cConn,
+el('div',{class:'f'},el('span',{},t('f_public')),el('div',{class:'kv'},el('span',{},t('f_public_on')),pubSw),el('small',{class:'muted'},t('f_public_hint'))),
 field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
@@ -431,7 +434,7 @@ btn(ed?t('save'):t('create'),ed?'floppy-disk':'plus',async()=>{
 const x=expF.get();
 if(!x.ok){toast(t('e_bad_date'));return}
 if(!ed&&CB&&!selKeys().every(av)){toast(t('e_combo_disabled'));return}
-const b={secret:secret.value,quota_gb:quota.value,conn_limit:st.kind==='v2'?0:connLim.value,note:note.value,tls:st.tls,transport:st.kind==='v2'?st.net:st.transport};
+const b={secret:secret.value,quota_gb:quota.value,conn_limit:st.kind==='v2'?0:connLim.value,note:note.value,public:pub,tls:st.tls,transport:st.kind==='v2'?st.net:st.transport};
 if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(U(x.d)/1000):0;
 try{
 if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
@@ -471,7 +474,7 @@ try{R=await api('GET','/api/components');box.replaceChildren(el('div',{class:'mu
 const doInstall=b=>{
 if(b.c==='udpcustom'){
 const cb=el('input',{type:'checkbox'});
-const ex=el('div',{class:'udpw'},el('ul',{},...['udp_warn_1','udp_warn_2','udp_warn_3','udp_warn_4'].map(k=>el('li',{},t(k)))),el('label',{class:'chk'},cb,el('span',{},t('udp_ack'))));
+const ex=el('div',{class:'udpw'},el('ul',{},...['udp_warn_1','udp_warn_2','udp_warn_4'].map(k=>el('li',{},t(k)))),el('label',{class:'chk'},cb,el('span',{},t('udp_ack'))));
 ask(t('udp_warn_lead'),t('cb_install'),()=>{if(!cb.checked){toast(t('udp_ack_needed'));return false}return runJob('/api/components/udpcustom/install',{ack:true},t('cb_w_install'))},{title:t('udp_warn_title'),extra:ex})
 }else ask(t('cb_install_confirm',b.n),t('cb_install'),()=>runJob('/api/components/'+b.c+'/install',{},t('cb_w_install')),{danger:false})
 };
@@ -530,7 +533,7 @@ const n=el('input',{type:'password',autocomplete:'new-password'});
 const c=el('input',{type:'password',autocomplete:'new-password'});
 const savePw=async()=>{
 if(n.value!==c.value){toast(t('s_mismatch'));return}
-try{await api('POST','/api/password',{old:o.value,new:n.value});toast(t('s_changed'));o.value=n.value=c.value=''}catch(e){terr(e)}
+try{await api('POST','/api/password',{old:o.value,new:n.value});toast(t('s_changed'));o.value=n.value=c.value='';setTimeout(()=>{location.href='/login'},1200)}catch(e){terr(e)}
 };
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
@@ -613,7 +616,7 @@ field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}]
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
-panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')))),
+panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
 panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
@@ -621,7 +624,7 @@ field(t('lim_cap'),cap,t('lim_cap_hint')),
 field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
 el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_reset'),'eraser',resetMonth)))),
-panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}))),
+panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('div',{class:'f'},el('span',{},t('pg_token')),seg([{v:'name',l:t('pg_tok_name'),i:'user'},{v:'token',l:t('pg_tok_rand'),i:'key'}],s.public_token?'token':'name',async v=>{try{await api('POST','/api/settings',{public_token:v==='token'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('small',{class:'muted'},t('pg_token_hint'))))),
 panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),bn,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn(bn.value),'pri'),btn(t('bn_clear'),'eraser',()=>saveBn(''))))),
 panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},

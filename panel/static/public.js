@@ -18,7 +18,7 @@ el('button',{class:'icon-btn',title:t('s_language'),onclick:()=>{const v=LANG===
 el('button',{class:'icon-btn',title:t('s_theme'),onclick:()=>{const v=document.documentElement.dataset.theme==='light'?'dark':'light';try{localStorage.setItem('theme',v)}catch(e){}document.documentElement.dataset.theme=v;tools()}},ic(th==='light'?'moon':'sun')))
 }
 function draw(){
-document.title=NAME;
+document.title=(D&&D.name)||'VPN';
 const box=$('#pub');
 if(NF){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('circle-exclamation'),el('div',{},t('p_not_found'))));return}
 if(!D){box.replaceChildren(el('div',{class:'pub pub-nf'},ic('spinner','fa-spin')));return}
