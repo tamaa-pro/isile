@@ -378,7 +378,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 @media(prefers-reduced-motion:reduce){.clp,.seg-i,.sw::before,.sw i,.stack>.panel,dialog,.dd-p{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 
 .xtra{display:grid;gap:10px}
-.ses{display:grid;gap:8px;align-content:start;overflow-y:auto;overscroll-behavior:contain;padding-inline-end:4px}
+.ses{display:grid;gap:8px;align-content:start;overflow-y:auto;overscroll-behavior:contain;padding:8px;background:var(--inp);border:1px solid var(--line);border-radius:13px}
 .ses-i{border:1px solid var(--line);border-radius:11px;background:var(--card2);padding:8px 10px;display:grid;gap:6px}
 .ses-i.cur{border-color:var(--pri)}
 .ses-h{display:flex;align-items:center;gap:10px}

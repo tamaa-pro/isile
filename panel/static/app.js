@@ -545,7 +545,7 @@ x.live?el('button',{class:'icon-btn danger',type:'button',title:t('se_close'),on
 el('div',{class:'ses-d'},kv(t('se_login'),dt(x.created)),kv(t('se_logout'),x.ended?dt(x.ended):'-'),kv(t('se_expiry'),x.exp?dt(x.exp):t('se_never')),kv(t('se_activity'),dt(x.last)),x.ip?kv('IP',x.ip):null))};
 const closeSes=x=>ask(x.current?t('se_close_cur'):t('se_close_confirm'),t('se_close'),async()=>{
 try{await api('POST','/api/sessions/close',{id:x.id});toast(t('se_closed'));if(x.current){setTimeout(()=>{location.href='/login'},600);return}await load()}catch(e){terr(e);return false}});
-const fit=()=>{const f=listBox.querySelector('.ses-i');if(!f){listBox.style.maxHeight='';return}const h=f.offsetHeight;if(!h){setTimeout(fit,100);return}listBox.style.maxHeight=Math.round(h*3.5+8*3)+'px'};
+const fit=()=>{const f=listBox.querySelector('.ses-i');if(!f){listBox.style.maxHeight='';return}const h=f.offsetHeight;if(!h){setTimeout(fit,100);return}listBox.style.maxHeight=Math.round(h*3.5+8*3+16+2)+'px'};
 const draw=r=>{
 listBox.replaceChildren(...(r.sessions.length?r.sessions.map(item):[el('div',{class:'empty'},t('se_none'))]));
 listBox.scrollTop=0;fit();
