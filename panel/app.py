@@ -1,4 +1,4 @@
-import os,sys,re,gzip,glob,json,time,uuid,hmac,base64,socket,calendar,secrets,shutil,sqlite3,tempfile,ipaddress,functools,threading,traceback,subprocess
+import os,sys,re,io,gzip,struct,glob,json,time,uuid,hmac,base64,socket,calendar,secrets,shutil,sqlite3,tempfile,ipaddress,functools,threading,traceback,subprocess
 from datetime import timedelta,datetime,timezone
 from zoneinfo import ZoneInfo,available_timezones
 from shlex import quote as shq
@@ -101,7 +101,10 @@ def init_db():
     c=db()
     c.executescript("""CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS accounts(name TEXT PRIMARY KEY,proto TEXT NOT NULL,secret TEXT NOT NULL,uid INTEGER,created INTEGER NOT NULL,expires INTEGER NOT NULL DEFAULT 0,quota INTEGER NOT NULL DEFAULT 0,up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'active',manual INTEGER NOT NULL DEFAULT 0,note TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS daily(d TEXT PRIMARY KEY,rx INTEGER NOT NULL DEFAULT 0,tx INTEGER NOT NULL DEFAULT 0);""")
+CREATE TABLE IF NOT EXISTS daily(d TEXT PRIMARY KEY,rx INTEGER NOT NULL DEFAULT 0,tx INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,created INTEGER NOT NULL,last INTEGER NOT NULL,exp INTEGER NOT NULL DEFAULT 0,ended INTEGER NOT NULL DEFAULT 0,why TEXT NOT NULL DEFAULT '',ip TEXT NOT NULL DEFAULT '',dev TEXT NOT NULL DEFAULT '',os TEXT NOT NULL DEFAULT '',br TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS login_log(ts INTEGER NOT NULL,ok INTEGER NOT NULL,ip TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS login_log_ts ON login_log(ts);""")
     cols={r["name"] for r in c.execute("PRAGMA table_info(accounts)")}
     if "tls" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN tls TEXT NOT NULL DEFAULT 'tls'")
@@ -126,8 +129,24 @@ CREATE TABLE IF NOT EXISTS daily(d TEXT PRIMARY KEY,rx INTEGER NOT NULL DEFAULT 
         rotate_sessions()
 def new_token():
     return secrets.token_hex(12)
-def rotate_sessions():
+def rotate_sessions(why="password"):
     put("sess_ver",secrets.token_hex(16))
+    end_sessions(why)
+def end_sessions(why,sid=None):
+    """Mark open sessions as ended (all of them, or only sid). Returns how many were closed."""
+    now=int(time.time())
+    c=db()
+    try:
+        if sid:
+            n=c.execute("UPDATE sessions SET ended=?,why=? WHERE id=? AND ended=0",(now,why,sid)).rowcount
+        else:
+            n=c.execute("UPDATE sessions SET ended=?,why=? WHERE ended=0",(now,why)).rowcount
+        c.commit()
+    except sqlite3.Error:
+        n=0
+    finally:
+        c.close()
+    return n
 def get(k,d=None):
     c=db()
     r=c.execute("SELECT v FROM settings WHERE k=?",(k,)).fetchone()
@@ -1022,9 +1041,133 @@ def midnight_exp():
         z=timezone.utc
     m=(datetime.now(z)+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
     return int(m.timestamp())
+SESS_MODES={"midnight":0,"24h":86400,"48h":172800,"7d":604800,"never":-1}
+def sess_mode():
+    v=get("sess_mode","midnight")
+    return v if v in SESS_MODES else "midnight"
+def session_exp():
+    m=sess_mode()
+    if m=="midnight":
+        return midnight_exp()
+    if m=="never":
+        return 0
+    return int(time.time())+SESS_MODES[m]
+def ua_info(ua):
+    ua=str(ua or "")[:400]
+    l=ua.lower()
+    if "ipad" in l or "tablet" in l or ("android" in l and "mobile" not in l):
+        dev="tablet"
+    elif "iphone" in l or "ipod" in l or "mobi" in l:
+        dev="mobile"
+    elif ua:
+        dev="desktop"
+    else:
+        dev="unknown"
+    if "windows" in l:
+        o="Windows"
+    elif "android" in l:
+        o="Android"
+    elif "iphone" in l or "ipad" in l or "ipod" in l:
+        o="iOS"
+    elif "cros" in l:
+        o="ChromeOS"
+    elif "mac os x" in l or "macintosh" in l:
+        o="macOS"
+    elif "linux" in l or "x11" in l:
+        o="Linux"
+    else:
+        o=""
+    br=""
+    for key,name in (("edgios/","Edge"),("edga/","Edge"),("edg/","Edge"),("opr/","Opera"),("opios/","Opera"),("samsungbrowser/","Samsung Internet"),("fxios/","Firefox"),("firefox/","Firefox"),("crios/","Chrome"),("chrome/","Chrome"),("version/","Safari")):
+        i=l.find(key)
+        if i>=0:
+            if name=="Safari" and "safari/" not in l:
+                continue
+            m=re.match(r"\d+",l[i+len(key):])
+            br=name+(" "+m.group(0) if m else "")
+            break
+    if not br:
+        if "curl/" in l:
+            br="curl"
+        elif ua:
+            br=re.sub(r"[^A-Za-z0-9 ._/+-]","",ua.split(" ")[0])[:24]
+    return dev,o,br
+def log_login(ok,ip):
+    try:
+        now=int(time.time())
+        c=db()
+        c.execute("INSERT INTO login_log(ts,ok,ip) VALUES(?,?,?)",(now,1 if ok else 0,ip[:45]))
+        c.execute("DELETE FROM login_log WHERE ts<?",(now-30*86400,))
+        c.commit()
+        c.close()
+    except sqlite3.Error:
+        pass
+def create_session(sid,ip):
+    now=int(time.time())
+    dev,o,br=ua_info(request.headers.get("User-Agent",""))
+    c=db()
+    c.execute("DELETE FROM sessions WHERE created<? AND (ended>0 OR (exp>0 AND exp<?))",(now-30*86400,now))
+    c.execute("INSERT INTO sessions(id,created,last,exp,ended,why,ip,dev,os,br) VALUES(?,?,?,?,0,'',?,?,?,?)",(sid,now,now,session_exp(),ip[:45],dev,o,br))
+    c.commit()
+    c.close()
 def valid_session():
+    sid=session.get("sid")
     sv=get("sess_ver","")
-    return bool(session.get("u")) and bool(sv) and hmac.compare_digest(str(session.get("sv","")),sv) and session.get("exp",0)>time.time()
+    if not (session.get("u") and sid and sv and hmac.compare_digest(str(session.get("sv","")),sv)):
+        return False
+    now=int(time.time())
+    c=db()
+    try:
+        r=c.execute("SELECT exp,ended,last FROM sessions WHERE id=?",(str(sid),)).fetchone()
+        if not r or r["ended"] or (r["exp"] and r["exp"]<=now):
+            return False
+        if now-r["last"]>=30:
+            c.execute("UPDATE sessions SET last=? WHERE id=?",(now,str(sid)))
+            c.commit()
+    finally:
+        c.close()
+    return True
+# ---- two-step verification (TOTP, RFC 6238: SHA-1, 6 digits, 30 s) ----
+TOTP_PENDING={}
+def totp_secret():
+    return get("totp_secret","")
+def totp_at(secret,counter):
+    key=base64.b32decode(secret)
+    h=hmac.new(key,struct.pack(">Q",counter),"sha1").digest()
+    o=h[-1]&15
+    return "%06d"%((struct.unpack(">I",h[o:o+4])[0]&0x7fffffff)%1000000)
+def totp_verify(secret,code,last=0):
+    code=re.sub(r"\s","",str(code or ""))
+    if not re.fullmatch(r"[0-9]{6}",code):
+        return None
+    c=int(time.time()//30)
+    hit=None
+    for k in (-1,0,1):
+        if hmac.compare_digest(totp_at(secret,c+k),code) and c+k>last:
+            hit=c+k
+    return hit
+def code_check(code):
+    """Second factor for sensitive actions. Returns '' when 2FA is off or the code is right."""
+    sec=totp_secret()
+    if not sec:
+        return ""
+    key="2fa:"+client_ip()
+    if blocked(key):
+        return "too_many"
+    if totp_verify(sec,code) is None:
+        fail(key)
+        audit("2fa-check-failed")
+        return "bad_code"
+    FAILS.pop(key,None)
+    return ""
+def qr_uri(text):
+    try:
+        import segno
+        buf=io.BytesIO()
+        segno.make(text,error="m").save(buf,kind="svg",scale=5,border=2,dark="#000000",light="#ffffff",xmldecl=False)
+        return "data:image/svg+xml;base64,"+base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
 def audit(ev,detail=""):
     try:
         ip=client_ip() if has_request_context() else "-"
@@ -1076,35 +1219,69 @@ def headers(r):
     else:
         r.headers["Cache-Control"]="no-store"
     return r
+def login_page(step=1,e="",code=200):
+    return render_template("login.html",csrf=session["csrf"],err=e,version=VERSION,step=step),code
+def finish_login(ip,u=""):
+    FAILS.pop(ip,None)
+    session.clear()
+    session.permanent=True
+    sid=secrets.token_hex(16)
+    session["u"]=1
+    session["sid"]=sid
+    session["csrf"]=secrets.token_hex(16)
+    session["sv"]=get("sess_ver","")
+    create_session(sid,ip)
+    log_login(True,ip)
+    audit("login-ok",u[:32])
+    return redirect("/")
 @app.route("/login",methods=["GET","POST"])
 def login():
     if not session.get("csrf"):
         session["csrf"]=secrets.token_hex(16)
     if request.method=="GET":
-        return render_template("login.html",csrf=session["csrf"],err="",version=VERSION)
+        session.pop("p2",None)
+        return login_page()
     ip=client_ip()
+    step2=request.form.get("step")=="2"
     if blocked(ip):
-        return render_template("login.html",csrf=session["csrf"],err="too_many",version=VERSION),429
+        return login_page(2 if step2 and session.get("p2") else 1,"too_many",429)
     if not hmac.compare_digest(request.form.get("csrf",""),session["csrf"]):
-        return render_template("login.html",csrf=session["csrf"],err="session_expired",version=VERSION),403
+        return login_page(1,"session_expired",403)
+    if step2:
+        p=session.get("p2")
+        sec=totp_secret()
+        if not p or p.get("exp",0)<time.time() or not sec:
+            session.pop("p2",None)
+            return login_page(1,"session_expired",403)
+        n=totp_verify(sec,request.form.get("code",""),int(get("totp_last","0") or 0))
+        if n is None:
+            fail(ip)
+            log_login(False,ip)
+            audit("login-2fa-failed")
+            p["n"]=p.get("n",0)+1
+            time.sleep(0.5)
+            if p["n"]>=5:
+                session.pop("p2",None)
+                return login_page(1,"bad_code",401)
+            session["p2"]=p
+            return login_page(2,"bad_code",401)
+        put("totp_last",n)
+        session.pop("p2",None)
+        return finish_login(ip,"2fa")
     u=request.form.get("username","")
     p=request.form.get("password","")
     ok_u=hmac.compare_digest(u.encode(),get("admin_user","").encode())
     ok_p=check_password_hash(get("admin_hash",""),p)
     if ok_u and ok_p:
-        FAILS.pop(ip,None)
-        session.clear()
-        session.permanent=True
-        session["u"]=1
-        session["exp"]=midnight_exp()
-        session["csrf"]=secrets.token_hex(16)
-        session["sv"]=get("sess_ver","")
-        audit("login-ok",u[:32])
-        return redirect("/")
+        if totp_secret():
+            session["p2"]={"exp":time.time()+300,"n":0}
+            return login_page(2)
+        return finish_login(ip,u)
     fail(ip)
+    log_login(False,ip)
     audit("login-failed",u[:32])
     time.sleep(0.5)
-    return render_template("login.html",csrf=session["csrf"],err="bad_login",version=VERSION),401
+    return login_page(1,"bad_login",401)
 @app.get("/")
 def index():
     if not valid_session():
@@ -1114,6 +1291,7 @@ def index():
 @auth
 def logout():
     audit("logout")
+    end_sessions("logout",session.get("sid"))
     session.clear()
     return jsonify(ok=True)
 @app.post("/api/password")
@@ -1122,7 +1300,7 @@ def change_password():
     d=request.get_json(silent=True) or {}
     old=str(d.get("old",""))
     new=str(d.get("new",""))
-    e=pw_check(old)
+    e=pw_check(old) or code_check(d.get("code"))
     if e:
         return err(e,429 if e=="too_many" else 400)
     if len(new)<10 or len(new)>128:
@@ -1131,6 +1309,87 @@ def change_password():
     rotate_sessions()
     audit("password-changed")
     session.clear()
+    return jsonify(ok=True)
+@app.get("/api/sessions")
+@auth
+def sessions_get():
+    rng=request.args.get("range")
+    span=7*86400 if rng=="7d" else 86400
+    now=int(time.time())
+    cut=now-span
+    cur=session.get("sid")
+    c=db()
+    try:
+        rows=c.execute("SELECT * FROM sessions WHERE created>=? OR last>=? OR (ended=0 AND (exp=0 OR exp>?)) ORDER BY created DESC LIMIT 200",(cut,cut,now)).fetchall()
+        st=c.execute("SELECT SUM(ok=1) AS a,SUM(ok=0) AS b FROM login_log WHERE ts>=?",(cut,)).fetchone()
+    finally:
+        c.close()
+    out=[]
+    for r in rows:
+        live=not r["ended"] and (not r["exp"] or r["exp"]>now)
+        out.append({"id":r["id"],"created":r["created"],"last":r["last"],"exp":r["exp"],"ended":r["ended"],"why":r["why"] if r["ended"] else ("expired" if not live else ""),"live":live,"current":r["id"]==cur,"ip":r["ip"],"dev":r["dev"],"os":r["os"],"br":r["br"]})
+    return jsonify(sessions=out,ok_n=int(st["a"] or 0),fail_n=int(st["b"] or 0),now=now,mode=sess_mode(),totp_on=bool(totp_secret()))
+@app.post("/api/sessions/close")
+@auth
+def sessions_close():
+    d=request.get_json(silent=True) or {}
+    sid=str(d.get("id",""))
+    if not re.fullmatch(r"[0-9a-f]{32}",sid):
+        return err("bad_values")
+    if not end_sessions("closed",sid):
+        return err("not_found",404)
+    audit("session-closed","current" if sid==session.get("sid") else "other")
+    if sid==session.get("sid"):
+        session.clear()
+    return jsonify(ok=True)
+@app.post("/api/2fa/setup")
+@auth
+def tfa_setup():
+    if totp_secret():
+        return err("tfa_on")
+    sec=base64.b32encode(secrets.token_bytes(20)).decode()
+    sid=session.get("sid")
+    now=time.time()
+    for k in [k for k,v in TOTP_PENDING.items() if v[1]<now]:
+        TOTP_PENDING.pop(k,None)
+    TOTP_PENDING[sid]=(sec,now+600)
+    issuer="isile"+((" "+host()) if host() else "")
+    label=quote(issuer+":"+get("admin_user","admin"))
+    uri="otpauth://totp/%s?secret=%s&issuer=%s&algorithm=SHA1&digits=6&period=30"%(label,sec,quote(issuer))
+    return jsonify(secret=sec,uri=uri,qr=qr_uri(uri))
+@app.post("/api/2fa/enable")
+@auth
+def tfa_enable():
+    d=request.get_json(silent=True) or {}
+    p=TOTP_PENDING.get(session.get("sid"))
+    if totp_secret():
+        return err("tfa_on")
+    if not p or p[1]<time.time():
+        return err("session_expired")
+    key="2fa:"+client_ip()
+    if blocked(key):
+        return err("too_many",429)
+    n=totp_verify(p[0],d.get("code"))
+    if n is None:
+        fail(key)
+        return err("bad_code")
+    FAILS.pop(key,None)
+    puts({"totp_secret":p[0],"totp_last":n})
+    TOTP_PENDING.pop(session.get("sid"),None)
+    audit("2fa-enabled")
+    return jsonify(ok=True)
+@app.post("/api/2fa/disable")
+@auth
+def tfa_disable():
+    d=request.get_json(silent=True) or {}
+    e=pw_check(str(d.get("password","")))
+    if e:
+        return err(e,429 if e=="too_many" else 400)
+    c=db()
+    c.execute("DELETE FROM settings WHERE k IN ('totp_secret','totp_last')")
+    c.commit()
+    c.close()
+    audit("2fa-disabled")
     return jsonify(ok=True)
 def cpu_pct():
     with open("/proc/stat") as f:
@@ -1285,7 +1544,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",""),"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list()}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",""),"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1325,6 +1584,10 @@ def settings_set():
         upd["tz"]=v
     if "tz_utc" in d:
         upd["tz_utc"]="1" if d["tz_utc"] else "0"
+    if "sess_mode" in d:
+        if d["sess_mode"] not in SESS_MODES:
+            return err("bad_values")
+        upd["sess_mode"]=d["sess_mode"]
     if "public_page" in d:
         upd["public_page"]="1" if d["public_page"] else "0"
     if "public_token" in d:
@@ -1583,7 +1846,7 @@ def sys_update():
 @auth
 def sys_uninstall():
     d=request.get_json(silent=True) or {}
-    e=pw_check(str(d.get("password","")))
+    e=pw_check(str(d.get("password",""))) or code_check(d.get("code"))
     if e:
         return err(e,429 if e=="too_many" else 400)
     audit("system-uninstall")
@@ -1595,7 +1858,7 @@ def sys_uninstall():
 @auth
 def sys_reset():
     d=request.get_json(silent=True) or {}
-    e=pw_check(str(d.get("password","")))
+    e=pw_check(str(d.get("password",""))) or code_check(d.get("code"))
     if e:
         return err(e,429 if e=="too_many" else 400)
     audit("system-reset")
@@ -2150,6 +2413,12 @@ def main():
         if os.environ.get("VPN_ADMIN_USER") or os.environ.get("VPN_ADMIN_PASS"):
             rotate_sessions()
         return
+    if cmd=="rm2fa":
+        c=db()
+        c.execute("DELETE FROM settings WHERE k IN ('totp_secret','totp_last')")
+        c.commit()
+        c.close()
+        return
     if cmd=="setselfsigned":
         put("selfsigned","1")
         return
@@ -2170,7 +2439,7 @@ def main():
         finally:
             c.close()
         return
-    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=panel_https(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536,PERMANENT_SESSION_LIFETIME=timedelta(hours=24))
+    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=panel_https(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536,PERMANENT_SESSION_LIFETIME=timedelta(days=360))
     with LOCK:
         c=db()
         nft_apply(c)

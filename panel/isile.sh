@@ -21,6 +21,7 @@ echo " Version   : $(cat "$APP/panel/VERSION" 2>/dev/null)"
 echo " Panel URL : $sc://$h:2080"
 echo " Username  : $u"
 echo " Password  : (stored hashed, use option 1 to set a new one)"
+if [ -n "$(dbget totp_secret)" ]; then echo " 2-step    : enabled (option 5 removes it)"; else echo " 2-step    : disabled"; fi
 echo " Domain    : ${d:-not set (server address, no TLS)}"
 echo " Server IP : ${ip:-unknown}"
 if [ -n "$d" ]; then echo " Ports     : 80 (no TLS) | 443 (TLS) | 2080 (panel, HTTPS)"; else echo " Ports     : 80 (no TLS) | 2080 (panel, HTTP)"; fi
@@ -54,6 +55,14 @@ VPN_ADMIN_USER="$nu" VPN_ADMIN_PASS="$np" "$PY" "$APP/panel/app.py" setadmin || 
 echo "Admin credentials updated."
 echo " Username : $(dbget admin_user)"
 [ -z "$np" ] || echo " Password : $np"
+}
+remove_2fa(){
+local ans
+[ -n "$(dbget totp_secret)" ] || { echo "Two-step verification is not enabled"; return; }
+read -rp "Remove two-step verification? [y/N]: " ans
+[[ "$ans" =~ ^[Yy]$ ]] || { echo "Cancelled"; return; }
+"$PY" "$APP/panel/app.py" rm2fa || { echo "Update failed"; return; }
+echo "Two-step verification was removed. You can enable it again from the panel settings."
 }
 update(){
 local r b
@@ -133,6 +142,7 @@ echo "  1) Edit admin credentials"
 echo "  2) Show panel info"
 echo "  3) Uninstall panel completely"
 echo "  4) Update to the latest version"
+[ -z "$(dbget totp_secret)" ] || echo "  5) Remove two-step verification"
 echo "  0) Exit"
 read -rp "> " c
 case "$c" in
@@ -140,6 +150,7 @@ case "$c" in
 2) show_info;;
 3) uninstall && exit 0;;
 4) update; exit 0;;
+5) remove_2fa;;
 0) exit 0;;
 *) echo "Invalid choice";;
 esac
@@ -150,6 +161,7 @@ case "${1:-}" in
 2) show_info;;
 3) uninstall "${2:-}";;
 4) update;;
+5) remove_2fa;;
 *) menu;;
 esac
 exit 0

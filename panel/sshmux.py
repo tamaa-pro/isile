@@ -13,6 +13,15 @@ DNS_ZONES=os.environ.get("MUX_DNS_ZONES","/etc/vpnpanel/dnszones")
 DNS_DEFAULT=int(os.environ.get("MUX_DNS_DEFAULT","5300"))
 LOCAL=("-","127.0.0.1","::1")
 SNIFF=float(os.environ.get("MUX_SNIFF","2"))
+# A connection that stays silent after SNIFF seconds is either an SSH client waiting for the server banner or a browser's
+# idle pre-opened socket. Browsers then send their request on it later, so forwarding it to sshd leaks the SSH banner.
+# Default: keep waiting for the client to speak first (up to MUX_HOLD seconds). Set MUX_SILENT_SSH=1 for banner-waiting SSH clients.
+SILENT_SSH=os.environ.get("MUX_SILENT_SSH","0")=="1"
+HOLD=float(os.environ.get("MUX_HOLD","120"))
+HOLD_MAX=int(os.environ.get("MUX_HOLD_MAX","3000"))
+HOLD_IP=20
+HELD={}
+HELD_N=[0]
 MAXC=150
 BAN={}
 BANN={}
@@ -67,10 +76,10 @@ def proxy_header(ip,sport,dport):
     if ":" in ip:
         return ("PROXY TCP6 %s ::1 %d %d\r\n"%(ip,sport,dport)).encode()
     return ("PROXY TCP4 %s 127.0.0.1 %d %d\r\n"%(ip,sport,dport)).encode()
-async def sniff(cr):
+async def sniff(cr,wait=None):
     buf=b""
     loop=asyncio.get_running_loop()
-    end=loop.time()+SNIFF
+    end=loop.time()+(SNIFF if wait is None else wait)
     while len(buf)<4:
         rem=end-loop.time()
         if rem<=0:
@@ -109,6 +118,7 @@ async def handle(cr,cw,tls,dns=False):
     sw=None
     ssh=False
     counted=False
+    held=False
     t0=time.time()
     try:
         sock=cw.get_extra_info("socket")
@@ -133,6 +143,24 @@ async def handle(cr,cw,tls,dns=False):
         buf,timed=await sniff(cr)
         if not buf and not timed:
             return
+        if timed and not buf and not dns and not SILENT_SSH:
+            if HELD_N[0]>=HOLD_MAX or HELD.get(ip,0)>=HOLD_IP:
+                return
+            HELD[ip]=HELD.get(ip,0)+1
+            HELD_N[0]+=1
+            held=True
+            try:
+                buf,timed=await sniff(cr,HOLD)
+            finally:
+                held=False
+                HELD_N[0]-=1
+                n=HELD.get(ip,1)-1
+                if n>0:
+                    HELD[ip]=n
+                else:
+                    HELD.pop(ip,None)
+            if not buf:
+                return
         ssh=buf.startswith(b"SSH-") or (timed and b"SSH-".startswith(buf))
         if ssh:
             if ip not in LOCAL:
