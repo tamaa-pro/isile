@@ -17,9 +17,17 @@
 <h2>isile <small>v{{ version }}</small></h2>
 <div class="err" data-err="{{ err }}" hidden></div>
 <input type="hidden" name="csrf" value="{{ csrf }}">
+{% if step == 2 %}
+<input type="hidden" name="step" value="2">
+<div class="muted sm" data-i18n="login_2fa_hint"></div>
+<label class="f"><span data-i18n="login_code"></span><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" dir="ltr" required autofocus></label>
+<button class="btn pri block" type="submit"><i class="fa-solid fa-shield-halved"></i> <span data-i18n="login_verify"></span></button>
+<a class="muted sm" href="/login" data-i18n="login_back"></a>
+{% else %}
 <label class="f"><span data-i18n="login_user"></span><input name="username" required autofocus></label>
 <label class="f"><span data-i18n="login_pass"></span><input name="password" type="password" required></label>
 <button class="btn pri block" type="submit"><i class="fa-solid fa-right-to-bracket"></i> <span data-i18n="login_btn"></span></button>
+{% endif %}
 </form>
 </body>
 </html>
