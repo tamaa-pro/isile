@@ -52,6 +52,7 @@ VAYDNS=no
 VAYDNS_DOM=""
 WANT_XRAY=1
 WANT_WS=1
+SELFSIGNED=no
 if [ "$MODE" = install ]; then
 STEP="reading settings"
 read -rp "Domain (press Enter to skip and use the server address without TLS): " DOMAIN </dev/tty
@@ -60,6 +61,11 @@ EMAIL=""
 if [ -n "$DOMAIN" ]; then
 [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid domain: $DOMAIN"
 read -rp "Email for certificate notices (optional): " EMAIL </dev/tty
+else
+echo "No domain: the panel will be served over plain HTTP unless you create a self-signed certificate."
+echo "(A self-signed certificate encrypts the connection but the browser will show a warning.)"
+read -rp "Create a self-signed certificate for the panel (HTTPS on port 2080)? [y/N]: " YN </dev/tty
+if [[ "$YN" =~ ^[Yy]$ ]]; then SELFSIGNED=yes; fi
 fi
 read -rp "Admin username: " ADMIN_USER </dev/tty
 [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "username must be 3-32 chars of A-Za-z0-9_.-"
@@ -165,6 +171,8 @@ PerSourcePenaltyExemptList 127.0.0.1,::1
 Match Group vpnusers
 PasswordAuthentication yes
 AllowTcpForwarding yes
+PermitListen none
+AllowStreamLocalForwarding no
 AllowAgentForwarding no
 X11Forwarding no
 PermitTTY no
@@ -175,10 +183,11 @@ ClientAliveInterval 60
 ClientAliveCountMax 3
 ForceCommand /usr/sbin/nologin
 EOT
-if ! sshd -t >>"$LOG" 2>&1; then
-sed -i '/PerSourcePenaltyExemptList/d' "$SSHD_CONF"
+for OPT in PerSourcePenaltyExemptList PermitListen AllowStreamLocalForwarding; do
+sshd -t >>"$LOG" 2>&1 && break
+sed -i "/^$OPT/d" "$SSHD_CONF"
+done
 sshd -t >>"$LOG" 2>&1 || { rm -f "$SSHD_CONF"; die "sshd rejected the generated configuration"; }
-fi
 systemctl reload ssh >>"$LOG" 2>&1 || true
 STEP="issuing TLS certificate"
 if [ -n "$DOMAIN" ]; then echo "[6/8] TLS certificate"; else echo "[6/8] No domain, skipping TLS certificate"; fi
@@ -273,6 +282,14 @@ else
 if [ -n "$SERVER_IP" ]; then VPN_SERVER_IP="$SERVER_IP" "$APP/venv/bin/python" "$APP/panel/app.py" setserver >>"$LOG" 2>&1 || true; fi
 fi
 chmod 600 "$DATA/panel.db"
+if [ "$MODE" = install ] && [ "$SELFSIGNED" = yes ]; then
+STEP="creating the self-signed certificate"
+install -d -m700 /etc/vpnpanel/selfsigned
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout /etc/vpnpanel/selfsigned/key.pem -out /etc/vpnpanel/selfsigned/cert.pem -subj "/CN=$SERVER_IP" -addext "subjectAltName=IP:$SERVER_IP" >>"$LOG" 2>&1 || die "could not create the self-signed certificate"
+chmod 600 /etc/vpnpanel/selfsigned/key.pem
+chmod 644 /etc/vpnpanel/selfsigned/cert.pem
+"$APP/venv/bin/python" "$APP/panel/app.py" setselfsigned >>"$LOG" 2>&1 || die "could not save the self-signed certificate setting"
+fi
 install -m755 "$APP/panel/isile.sh" /usr/local/bin/isile
 STEP="restoring default ports"
 OLDP="$(dbget port_http) $(dbget port_https) $(dbget port_panel)"
@@ -405,7 +422,9 @@ if [ -s /etc/vpnpanel/stunnel.conf ]; then
 SSHB="$( (sleep 4) | timeout 10 openssl s_client -quiet -connect 127.0.0.1:443 -servername "$DOMAIN" 2>/dev/null | head -c 4 || true)"
 [ "$SSHB" = "SSH-" ] || echo "Warning: direct SSH over TLS on port 443 did not answer, SSH SSL with TLS may not work (see $LOG)"
 fi
-if [ -n "$DOMAIN" ]; then SCHEME=https; PUB="$DOMAIN"; else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
+if [ -n "$DOMAIN" ]; then SCHEME=https; PUB="$DOMAIN"
+elif [ "$(dbget selfsigned)" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ]; then SCHEME=https; PUB="${SERVER_IP:-$(dbget server_ip)}"
+else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
 CODE=000
 for i in $(seq 1 20); do
 CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:2080/login" || true)"
@@ -434,7 +453,7 @@ if [ -n "$DOMAIN" ]; then
 echo " Open ports 80, 443, 2080 and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS) and 443 (TLS via stunnel)."
 else
-echo " No domain: the panel and connections use plain HTTP without TLS."
+if [ "$SCHEME" = https ]; then echo " No domain: the panel uses a self-signed certificate (the browser will warn once); connections use plain HTTP without TLS."; else echo " No domain: the panel and connections use plain HTTP without TLS."; fi
 echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS). TLS needs a domain."
 echo " You can add a domain later from the panel Settings."
