@@ -1342,6 +1342,17 @@ def sessions_close():
     if sid==session.get("sid"):
         session.clear()
     return jsonify(ok=True)
+@app.post("/api/sessions/clear")
+@auth
+def sessions_clear():
+    c=db()
+    try:
+        n=c.execute("DELETE FROM sessions WHERE id!=?",(str(session.get("sid")),)).rowcount
+        c.commit()
+    finally:
+        c.close()
+    audit("sessions-cleared",str(n))
+    return jsonify(ok=True,n=n)
 @app.post("/api/2fa/setup")
 @auth
 def tfa_setup():
