@@ -11,7 +11,9 @@ local d u ip sc h
 d="$(dbget domain)"
 ip="$(dbget server_ip)"
 u="$(dbget admin_user)"
-if [ -n "$d" ]; then sc=https; h="$d"; else sc=http; h="${ip:-server-address}"; fi
+if [ -n "$d" ]; then sc=https; h="$d"
+elif [ "$(dbget selfsigned)" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ]; then sc=https; h="${ip:-server-address}"
+else sc=http; h="${ip:-server-address}"; fi
 echo "=================================================="
 echo "  isile panel info"
 echo "=================================================="

@@ -2,6 +2,7 @@ import asyncio,os,time
 SSH_PORT=int(os.environ.get("SSH_PORT","22"))
 RESP=b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
 BAN={}
+BANN={}
 HITS={}
 def banned(ip):
     t=BAN.get(ip)
@@ -14,11 +15,17 @@ def strike(ip):
     if len(HITS)>20000:
         HITS.clear()
         BAN.clear()
+        BANN.clear()
     h=[x for x in HITS.get(ip,[]) if now-x<60]
     h.append(now)
     HITS[ip]=h
     if len(h)>=30:
-        BAN[ip]=now+600
+        n,t0=BANN.get(ip,(0,0))
+        if now-t0>86400:
+            n=0
+        n+=1
+        BANN[ip]=(n,now)
+        BAN[ip]=now+min(600*2**(n-1),86400)
         HITS.pop(ip,None)
 async def pipe(r,w):
     try:

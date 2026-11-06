@@ -33,6 +33,10 @@ LST='listen 2080 ssl; listen [::]:2080 ssl;'
 SSL="ssl_certificate /etc/letsencrypt/live/$d/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$d/privkey.pem; ssl_protocols TLSv1.2 TLSv1.3; ssl_session_cache shared:vpnssl:10m; ssl_session_timeout 1d; ssl_session_tickets off;"
 HSTS='add_header Strict-Transport-Security "max-age=31536000" always;'
 PROTO=https
+elif [ -z "$d" ] && [ "$(dbget selfsigned)" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ] && [ -s /etc/vpnpanel/selfsigned/key.pem ]; then
+LST='listen 2080 ssl; listen [::]:2080 ssl;'
+SSL="ssl_certificate /etc/vpnpanel/selfsigned/cert.pem; ssl_certificate_key /etc/vpnpanel/selfsigned/key.pem; ssl_protocols TLSv1.2 TLSv1.3; ssl_session_cache shared:vpnssl:10m; ssl_session_timeout 1d; ssl_session_tickets off;"
+PROTO=https
 fi
 rm -f /etc/nginx/sites-enabled/default
 if [ -f /etc/nginx/conf.d/vpnpanel.conf ]; then cp -f /etc/nginx/conf.d/vpnpanel.conf /etc/nginx/conf.d/vpnpanel.conf.bak; fi

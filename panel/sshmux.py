@@ -15,6 +15,7 @@ LOCAL=("-","127.0.0.1","::1")
 SNIFF=float(os.environ.get("MUX_SNIFF","2"))
 MAXC=150
 BAN={}
+BANN={}
 HITS={}
 CONN={}
 def norm(ip):
@@ -38,11 +39,17 @@ def strike(ip):
     if len(HITS)>20000:
         HITS.clear()
         BAN.clear()
+        BANN.clear()
     h=[x for x in HITS.get(ip,[]) if now-x<60]
     h.append(now)
     HITS[ip]=h
     if len(h)>=30:
-        BAN[ip]=now+600
+        n,t0=BANN.get(ip,(0,0))
+        if now-t0>86400:
+            n=0
+        n+=1
+        BANN[ip]=(n,now)
+        BAN[ip]=now+min(600*2**(n-1),86400)
         HITS.pop(ip,None)
 def parse_proxy(line):
     p=line.decode("ascii","ignore").strip().split(" ")

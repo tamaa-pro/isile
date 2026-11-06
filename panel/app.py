@@ -1,10 +1,10 @@
-import os,sys,re,json,time,uuid,hmac,base64,socket,calendar,secrets,shutil,sqlite3,tempfile,functools,threading,traceback,subprocess
+import os,sys,re,gzip,glob,json,time,uuid,hmac,base64,socket,calendar,secrets,shutil,sqlite3,tempfile,ipaddress,functools,threading,traceback,subprocess
 from datetime import timedelta,datetime,timezone
 from zoneinfo import ZoneInfo,available_timezones
 from shlex import quote as shq
 from urllib.parse import quote
 from urllib.request import urlopen,Request
-from flask import Flask,request,session,jsonify,render_template,redirect,Response
+from flask import Flask,request,session,jsonify,render_template,redirect,Response,has_request_context
 from werkzeug.security import generate_password_hash,check_password_hash
 import sshconn
 BASE=os.path.dirname(os.path.abspath(__file__))
@@ -14,12 +14,16 @@ DBP=DATA+"/panel.db"
 JOBF=DATA+"/job.json"
 RCF=DATA+"/job.rc"
 LOGF="/var/log/isile-install.log"
+AUDIT="/var/log/isile-audit.log"
+ARCH="/var/log/isile-archive"
+ARCH_KEEP=5
+SELFSIGNED_CERT="/etc/vpnpanel/selfsigned/cert.pem"
 BANNER_TXT="/etc/vpnpanel/banner.txt"
 BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
 BANNER_MAX=2000
 DECOY_RE=re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&:@+-]*)?$")
 DECOY_MAX=300
-LOGS={"install":("file",LOGF),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"slowdns":("unit",["slowdns"])}
+LOGS={"install":("file",LOGF),"audit":("file",AUDIT),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"slowdns":("unit",["slowdns"])}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -64,7 +68,7 @@ NAME_RE=re.compile(r"^[a-z][a-z0-9_]{2,19}$")
 SECRET_RE=re.compile(r"^[A-Za-z0-9@#%_.+=-]{6,64}$")
 UUID_RE=re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DOMAIN_RE=re.compile(r"^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$")
-EMAIL_RE=re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+EMAIL_RE=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 ALNUM="abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 LOCK=threading.RLock()
 FAILS={}
@@ -78,6 +82,7 @@ SP_B={}
 SP_T=time.time()
 SPEED_TTL=30
 RESERVED=("login","api","static")
+TOKEN_RE=re.compile(r"^[0-9a-f]{24}$")
 CONN={}
 SSH_OVER={}
 CONN_MAX=1000
@@ -104,6 +109,12 @@ CREATE TABLE IF NOT EXISTS daily(d TEXT PRIMARY KEY,rx INTEGER NOT NULL DEFAULT 
         c.execute("ALTER TABLE accounts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ws'")
     if "conn_limit" not in cols:
         c.execute("ALTER TABLE accounts ADD COLUMN conn_limit INTEGER NOT NULL DEFAULT 0")
+    if "public" not in cols:
+        c.execute("ALTER TABLE accounts ADD COLUMN public INTEGER NOT NULL DEFAULT 0")
+    if "ptoken" not in cols:
+        c.execute("ALTER TABLE accounts ADD COLUMN ptoken TEXT NOT NULL DEFAULT ''")
+    for r in c.execute("SELECT name FROM accounts WHERE ptoken=''").fetchall():
+        c.execute("UPDATE accounts SET ptoken=? WHERE name=?",(new_token(),r["name"]))
     c.execute("DROP TABLE IF EXISTS v2block")
     c.execute("UPDATE accounts SET conn_limit=0 WHERE proto!='ssh' AND conn_limit!=0")
     c.commit()
@@ -111,6 +122,12 @@ CREATE TABLE IF NOT EXISTS daily(d TEXT PRIMARY KEY,rx INTEGER NOT NULL DEFAULT 
     os.chmod(DBP,0o600)
     if not get("secret_key"):
         put("secret_key",secrets.token_hex(32))
+    if not get("sess_ver"):
+        rotate_sessions()
+def new_token():
+    return secrets.token_hex(12)
+def rotate_sessions():
+    put("sess_ver",secrets.token_hex(16))
 def get(k,d=None):
     c=db()
     r=c.execute("SELECT v FROM settings WHERE k=?",(k,)).fetchone()
@@ -132,6 +149,8 @@ def host():
     return get("domain","") or get("server_ip","")
 def tls_on():
     return bool(get("domain",""))
+def panel_https():
+    return tls_on() or (get("selfsigned","0")=="1" and os.path.isfile(SELFSIGNED_CERT))
 def sh(args,inp=None):
     return subprocess.run(args,input=inp,capture_output=True,text=True,timeout=40)
 def gen_pass():
@@ -175,6 +194,35 @@ def ssh_del(n):
         sh(["pkill","-KILL","-u",n])
         time.sleep(0.3)
         sh(["userdel","-f",n])
+DNSSIG=[None]
+def dns_servers():
+    v4=["127.0.0.0/8"]
+    v6=["::1"]
+    try:
+        with open("/etc/resolv.conf") as f:
+            lines=f.read().splitlines()
+    except OSError:
+        lines=[]
+    for l in lines:
+        m=re.match(r"\s*nameserver\s+(\S+)",l)
+        if not m or "%" in m.group(1):
+            continue
+        try:
+            ip=ipaddress.ip_address(m.group(1))
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local and ip.version==6:
+            continue
+        a=str(ip)
+        if ip.version==4:
+            if a not in v4:
+                v4.append(a)
+        elif a not in v6:
+            v6.append(a)
+    return v4,v6
+def dns_sig():
+    v4,v6=dns_servers()
+    return (tuple(v4),tuple(v6))
 def nft_apply(c):
     uids=[r["uid"] for r in c.execute("SELECT uid FROM accounts WHERE proto='ssh' AND uid IS NOT NULL")]
     rng="meta skuid >= %d meta skuid < %d"%(UID0,UID1)
@@ -184,7 +232,10 @@ def nft_apply(c):
         L.append(" counter cd%d { }"%u)
     L.append(" chain out {")
     L.append("  type filter hook output priority -150; policy accept;")
-    L.append("  "+rng+" meta l4proto { tcp, udp } th dport 53 accept")
+    ns4,ns6=dns_servers()
+    DNSSIG[0]=(tuple(ns4),tuple(ns6))
+    L.append("  "+rng+" meta l4proto { tcp, udp } th dport 53 ip daddr { %s } accept"%", ".join(ns4))
+    L.append("  "+rng+" meta l4proto { tcp, udp } th dport 53 ip6 daddr { %s } accept"%", ".join(ns6))
     if comp_installed("udpcustom"):
         L.append("  "+rng+" ip daddr 127.0.0.1 tcp dport 7300 accept")
     L.append("  "+rng+" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } drop")
@@ -469,7 +520,7 @@ def udp_line(l):
     with UDPS_LOCK:
         if "Client connected" in l:
             u=RE_UUSER.search(l)
-            if u and RE_UNAME.match(u.group(1)):
+            if u and RE_UNAME.fullmatch(u.group(1)):
                 UDPS[src]=(u.group(1),pid)
         elif "Client disconnected" in l:
             v=UDPS.pop(src,None)
@@ -610,10 +661,27 @@ def speed_of(n):
     if not sp or time.time()-sp[2]>SPEED_TTL:
         return 0,0
     return int(sp[0]),int(sp[1])
-def page_url(n):
-    return "%s://%s:2080/%s"%("https" if tls_on() else "http",host(),n)
+def page_url(key):
+    return "%s://%s:2080/%s"%("https" if panel_https() else "http",host(),key)
 def public_on():
     return get("public_page","0")=="1"
+def token_mode():
+    return get("public_token","0")=="1"
+def public_row(key):
+    key=(key or "").lower()
+    c=db()
+    try:
+        if TOKEN_RE.fullmatch(key):
+            r=c.execute("SELECT * FROM accounts WHERE ptoken=?",(key,)).fetchone()
+        elif NAME_RE.fullmatch(key) and key not in RESERVED and not token_mode():
+            r=c.execute("SELECT * FROM accounts WHERE name=?",(key,)).fetchone()
+        else:
+            r=None
+    finally:
+        c.close()
+    if r and (public_on() or r["public"]):
+        return r
+    return None
 def client_of(r):
     if r["proto"]=="trojan":
         return {"password":r["secret"],"email":r["name"],"level":0}
@@ -902,6 +970,8 @@ def worker():
                 c=db()
                 try:
                     collect(c)
+                    if dns_sig()!=DNSSIG[0]:
+                        nft_apply(c)
                     if n%3==0:
                         reconcile(c)
                 finally:
@@ -953,8 +1023,32 @@ def midnight_exp():
     m=(datetime.now(z)+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
     return int(m.timestamp())
 def valid_session():
-    h=get("admin_hash","")
-    return bool(session.get("u")) and session.get("ph")==h[:16] and session.get("exp",0)>time.time()
+    sv=get("sess_ver","")
+    return bool(session.get("u")) and bool(sv) and hmac.compare_digest(str(session.get("sv","")),sv) and session.get("exp",0)>time.time()
+def audit(ev,detail=""):
+    try:
+        ip=client_ip() if has_request_context() else "-"
+        line="%s ip=%s %s %s"%(time.strftime("%Y-%m-%d %H:%M:%S%z"),re.sub(r"[^0-9A-Fa-f:.\-]","",ip)[:45] or "-",ev,re.sub(r"[\x00-\x1f\x7f]"," ",str(detail))[:200])
+        try:
+            if os.path.getsize(AUDIT)>10*1024*1024:
+                os.replace(AUDIT,AUDIT+".1")
+        except OSError:
+            pass
+        fd=os.open(AUDIT,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+        with os.fdopen(fd,"a",encoding="utf-8") as f:
+            f.write(line+"\n")
+    except Exception:
+        pass
+def pw_check(pw):
+    key="pw:"+client_ip()
+    if blocked(key):
+        return "too_many"
+    if check_password_hash(get("admin_hash",""),pw):
+        FAILS.pop(key,None)
+        return ""
+    fail(key)
+    audit("password-check-failed")
+    return "wrong_password"
 def auth(f):
     @functools.wraps(f)
     def w(*a,**k):
@@ -1004,9 +1098,11 @@ def login():
         session["u"]=1
         session["exp"]=midnight_exp()
         session["csrf"]=secrets.token_hex(16)
-        session["ph"]=get("admin_hash")[:16]
+        session["sv"]=get("sess_ver","")
+        audit("login-ok",u[:32])
         return redirect("/")
     fail(ip)
+    audit("login-failed",u[:32])
     time.sleep(0.5)
     return render_template("login.html",csrf=session["csrf"],err="bad_login",version=VERSION),401
 @app.get("/")
@@ -1017,6 +1113,7 @@ def index():
 @app.post("/api/logout")
 @auth
 def logout():
+    audit("logout")
     session.clear()
     return jsonify(ok=True)
 @app.post("/api/password")
@@ -1025,13 +1122,15 @@ def change_password():
     d=request.get_json(silent=True) or {}
     old=str(d.get("old",""))
     new=str(d.get("new",""))
-    if not check_password_hash(get("admin_hash",""),old):
-        return err("wrong_password")
+    e=pw_check(old)
+    if e:
+        return err(e,429 if e=="too_many" else 400)
     if len(new)<10 or len(new)>128:
         return err("short_password")
-    h=generate_password_hash(new)
-    put("admin_hash",h)
-    session["ph"]=h[:16]
+    put("admin_hash",generate_password_hash(new))
+    rotate_sessions()
+    audit("password-changed")
+    session.clear()
     return jsonify(ok=True)
 def cpu_pct():
     with open("/proc/stat") as f:
@@ -1186,7 +1285,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"banner":get("banner",""),"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list()}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",""),"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1228,12 +1327,14 @@ def settings_set():
         upd["tz_utc"]="1" if d["tz_utc"] else "0"
     if "public_page" in d:
         upd["public_page"]="1" if d["public_page"] else "0"
+    if "public_token" in d:
+        upd["public_token"]="1" if d["public_token"] else "0"
     dy={}
     if "decoy_on" in d:
         dy["decoy_on"]="1" if d["decoy_on"] else "0"
     if "decoy_url" in d:
         u=str(d["decoy_url"] or "").strip()
-        if u and (len(u)>DECOY_MAX or not DECOY_RE.match(u)):
+        if u and (len(u)>DECOY_MAX or not DECOY_RE.fullmatch(u)):
             return err("bad_decoy_url")
         dy["decoy_url"]=u
     if "banner" in d:
@@ -1246,6 +1347,7 @@ def settings_set():
         upd["banner"]=txt
     if upd:
         puts(upd)
+        audit("settings",",".join(sorted(upd)))
     if dy:
         old={k:get(k,"") for k in dy}
         puts(dy)
@@ -1354,6 +1456,21 @@ def log_text(k,n,full=False):
     except subprocess.TimeoutExpired:
         return ""
     return "\n".join(l for l in r.stdout.splitlines() if not l.startswith("-- "))
+def archive_log(k,src):
+    try:
+        if os.path.getsize(src)==0:
+            return ""
+        os.makedirs(ARCH,mode=0o700,exist_ok=True)
+        os.chmod(ARCH,0o700)
+        dst="%s/%s-%s.log.gz"%(ARCH,k,time.strftime("%Y%m%d-%H%M%S"))
+        with open(src,"rb") as a,gzip.open(dst,"wb",compresslevel=6) as b:
+            shutil.copyfileobj(a,b)
+        os.chmod(dst,0o600)
+        for p in sorted(glob.glob("%s/%s-*.log.gz"%(ARCH,k)))[:-ARCH_KEEP]:
+            os.unlink(p)
+    except OSError as e:
+        return str(e)
+    return ""
 @app.get("/api/logs")
 @auth
 def logs_list():
@@ -1383,11 +1500,14 @@ def logs_clear(k):
         return err("not_found",404)
     kind,src=LOGS[k]
     if kind=="file":
+        ae=archive_log(k,src)
+        audit("log-clear",k+(" (archive failed: %s)"%ae if ae else " (archived)"))
         try:
             open(src,"w").close()
         except OSError as e:
             return err("system",500,str(e))
     else:
+        audit("log-clear",k+" (journal hidden from panel only)")
         put("logclr_"+k,int(time.time()))
     return jsonify(ok=True)
 @app.get("/api/domain")
@@ -1395,7 +1515,7 @@ def logs_clear(k):
 def domain_get():
     cur=get("domain","")
     cand=str(request.args.get("d","")).strip().lower() or cur
-    if cand and not DOMAIN_RE.match(cand):
+    if cand and not DOMAIN_RE.fullmatch(cand):
         return err("bad_domain")
     ip=get("server_ip","")
     dns=dns_of(cand) if cand else []
@@ -1417,12 +1537,13 @@ def domain_set():
     d=request.get_json(silent=True) or {}
     dom=str(d.get("domain","")).strip().lower()
     email=str(d.get("email","")).strip()
-    if not DOMAIN_RE.match(dom):
+    if not DOMAIN_RE.fullmatch(dom):
         return err("bad_domain")
-    if email and not EMAIL_RE.match(email):
+    if email and not EMAIL_RE.fullmatch(email):
         return err("bad_email")
     if dom in (vaydns_domain(),slowdns_domain()):
         return err("domain_same")
+    audit("domain-set",dom)
     e=start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email)))
     if e:
         return err("system",500,e)
@@ -1438,13 +1559,14 @@ def latest_version():
             v=r.read(256).decode("utf-8","replace").strip().splitlines()[0].strip()
     except Exception:
         v=""
-    if not re.match(r"^[0-9A-Za-z .+_-]{1,32}$",v):
+    if not re.fullmatch(r"^[0-9A-Za-z .+_-]{1,32}$",v):
         return err("unavailable",502)
     return jsonify(latest=v)
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
     us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom"),("vaydns","vaydns"),("slowdns","slowdns")) if comp_on(c) and (c!="vaydns" or vaydns_domain()) and (c!="slowdns" or slowdns_domain())]+["nginx","vpnmux"]
+    audit("system-restart")
     e=start_job("restart","sleep 1; systemctl restart %s; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel"%" ".join(us))
     if e:
         return err("system",500,e)
@@ -1452,6 +1574,7 @@ def sys_restart():
 @app.post("/api/system/update")
 @auth
 def sys_update():
+    audit("system-update")
     e=start_job("update","/usr/local/bin/isile 4")
     if e:
         return err("system",500,e)
@@ -1460,8 +1583,10 @@ def sys_update():
 @auth
 def sys_uninstall():
     d=request.get_json(silent=True) or {}
-    if not check_password_hash(get("admin_hash",""),str(d.get("password",""))):
-        return err("wrong_password")
+    e=pw_check(str(d.get("password","")))
+    if e:
+        return err(e,429 if e=="too_many" else 400)
+    audit("system-uninstall")
     e=start_job("uninstall","/usr/local/bin/isile 3 --yes")
     if e:
         return err("system",500,e)
@@ -1470,8 +1595,10 @@ def sys_uninstall():
 @auth
 def sys_reset():
     d=request.get_json(silent=True) or {}
-    if not check_password_hash(get("admin_hash",""),str(d.get("password",""))):
-        return err("wrong_password")
+    e=pw_check(str(d.get("password","")))
+    if e:
+        return err(e,429 if e=="too_many" else 400)
+    audit("system-reset")
     with LOCK:
         c=db()
         try:
@@ -1480,7 +1607,7 @@ def sys_reset():
                     ssh_del(r["name"])
             c.execute("DELETE FROM accounts")
             c.execute("DELETE FROM daily")
-            c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','banner')")
+            c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','public_token','banner')")
             c.commit()
             puts({"m_rx":0,"m_tx":0,"m_off":0})
             apply_banner("")
@@ -1589,7 +1716,7 @@ def combo_set():
 def vaydns_config():
     d=request.get_json(silent=True) or {}
     dom=str(d.get("domain","")).strip().lower()
-    if dom and not DOMAIN_RE.match(dom):
+    if dom and not DOMAIN_RE.fullmatch(dom):
         return err("bad_domain")
     if dom and dom in (get("domain",""),slowdns_domain()):
         return err("domain_same")
@@ -1608,7 +1735,7 @@ def vaydns_config():
 def slowdns_config():
     d=request.get_json(silent=True) or {}
     dom=str(d.get("domain","")).strip().lower()
-    if dom and not DOMAIN_RE.match(dom):
+    if dom and not DOMAIN_RE.fullmatch(dom):
         return err("bad_domain")
     if dom and dom in (get("domain",""),vaydns_domain()):
         return err("domain_same")
@@ -1650,7 +1777,7 @@ def lst():
     c=db()
     rows=[]
     for r in c.execute("SELECT * FROM accounts ORDER BY created DESC"):
-        o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls","transport")}
+        o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls","transport","public")}
         cn=CONN.get(r["name"],{})
         o["conn"]=cn.get("n",0)
         o["conn_limit"]=r["conn_limit"]
@@ -1759,8 +1886,8 @@ def info(name):
             items.append({"k":"grpc_service","value":p+"-grpc","rows":1})
         if r["transport"]=="xhttp":
             items.append({"k":"xhttp_path","value":"/"+p+"-xhttp","rows":1})
-    if public_on():
-        items.insert(0,{"k":"page","value":page_url(n),"rows":1})
+    if public_on() or r["public"]:
+        items.insert(0,{"k":"page","value":page_url(r["ptoken"] if token_mode() else n),"rows":1})
     cn=CONN.get(n,{})
     act=is_live(n,r["proto"],r["status"],cn.get("n",0))
     spu,spd=speed_of(n) if act else (0,0)
@@ -1800,7 +1927,7 @@ def create():
     name=str(d.get("name","")).strip().lower()
     if proto not in PROTOS:
         return err("bad_proto")
-    if not NAME_RE.match(name):
+    if not NAME_RE.fullmatch(name):
         return err("bad_name")
     if name in RESERVED:
         return err("name_reserved")
@@ -1831,13 +1958,14 @@ def create():
     sec=str(d.get("secret") or "").strip()
     if proto in ("vless","vmess"):
         sec=sec.lower() or str(uuid.uuid4())
-        if not UUID_RE.match(sec):
+        if not UUID_RE.fullmatch(sec):
             return err("bad_uuid")
     else:
         sec=sec or gen_pass()
-        if not SECRET_RE.match(sec):
+        if not SECRET_RE.fullmatch(sec):
             return err("bad_secret")
     note=str(d.get("note") or "")[:100]
+    pub=1 if d.get("public") else 0
     with LOCK:
         c=db()
         try:
@@ -1853,8 +1981,9 @@ def create():
                 except RuntimeError as e:
                     return err("system",400,str(e))
             now=int(time.time())
-            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport,conn_limit) VALUES(?,?,?,?,?,?,?,?,'active',?,?,?)",(name,proto,sec,uid,now,pc["expires"],pc["quota"],note,tls,transport,pc["conn_limit"]))
+            c.execute("INSERT INTO accounts(name,proto,secret,uid,created,expires,quota,note,status,tls,transport,conn_limit,public,ptoken) VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?,?)",(name,proto,sec,uid,now,pc["expires"],pc["quota"],note,tls,transport,pc["conn_limit"],pub,new_token()))
             c.commit()
+            audit("account-create","%s %s"%(name,proto))
             if proto=="ssh":
                 collect(c)
                 nft_apply(c)
@@ -1882,9 +2011,9 @@ def edit(name):
                 sec=str(d["secret"]).strip()
                 if r["proto"] in ("vless","vmess"):
                     sec=sec.lower()
-                    if not UUID_RE.match(sec):
+                    if not UUID_RE.fullmatch(sec):
                         return err("bad_uuid")
-                elif not SECRET_RE.match(sec):
+                elif not SECRET_RE.fullmatch(sec):
                     return err("bad_secret")
             if sec:
                 sets["secret"]=sec
@@ -1918,12 +2047,16 @@ def edit(name):
                 sets["note"]=str(d.get("note") or "")[:100]
             if "manual" in d:
                 sets["manual"]=1 if d["manual"] else 0
+            if "public" in d:
+                sets["public"]=1 if d["public"] else 0
             if d.get("reset"):
                 sets["up"]=0
                 sets["down"]=0
             if sets:
                 c.execute("UPDATE accounts SET "+",".join(k+"=?" for k in sets)+" WHERE name=?",list(sets.values())+[name])
                 c.commit()
+            if sets:
+                audit("account-edit","%s %s"%(name,",".join(k for k in sorted(sets) if k not in ("up","down"))))
             if sec and r["proto"]=="ssh":
                 ssh_pass(name,sec)
             reconcile(c)
@@ -1944,6 +2077,7 @@ def delete(name):
                 ssh_del(name)
             c.execute("DELETE FROM accounts WHERE name=?",(name,))
             c.commit()
+            audit("account-delete",name)
             if r["proto"]=="ssh":
                 nft_apply(c)
             else:
@@ -1957,7 +2091,7 @@ def geo_lookup(ip):
         try:
             with urlopen(Request(url,headers={"User-Agent":"isile"}),timeout=5) as r:
                 cc=str(json.loads(r.read(65536).decode("utf-8","replace")).get("country_code","")).upper()
-            if re.match(r"^[A-Z]{2}$",cc):
+            if re.fullmatch(r"^[A-Z]{2}$",cc):
                 return cc
         except Exception:
             pass
@@ -1983,14 +2117,10 @@ def server_cc():
     return ""
 @app.get("/api/public/<name>")
 def public_api(name):
-    name=name.lower()
-    if not public_on() or not NAME_RE.match(name):
-        return err("not_found",404)
-    c=db()
-    r=c.execute("SELECT * FROM accounts WHERE name=?",(name,)).fetchone()
-    c.close()
+    r=public_row(name)
     if not r:
         return err("not_found",404)
+    name=r["name"]
     cn=CONN.get(name,{})
     act=is_live(name,r["proto"],r["status"],cn.get("n",0))
     spu,spd=speed_of(name) if act else (0,0)
@@ -1998,7 +2128,7 @@ def public_api(name):
 @app.get("/<name>")
 def public_page(name):
     name=name.lower()
-    if not public_on() or name in RESERVED or not NAME_RE.match(name):
+    if name in RESERVED or not public_row(name):
         return "Not found",404
     return render_template("public.html",name=name,version=VERSION,tz=panel_tz())
 def main():
@@ -2017,6 +2147,11 @@ def main():
             put("admin_user",os.environ["VPN_ADMIN_USER"])
         if os.environ.get("VPN_ADMIN_PASS"):
             put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
+        if os.environ.get("VPN_ADMIN_USER") or os.environ.get("VPN_ADMIN_PASS"):
+            rotate_sessions()
+        return
+    if cmd=="setselfsigned":
+        put("selfsigned","1")
         return
     if cmd=="setserver":
         if os.environ.get("VPN_SERVER_IP"):
@@ -2035,7 +2170,7 @@ def main():
         finally:
             c.close()
         return
-    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=tls_on(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536,PERMANENT_SESSION_LIFETIME=timedelta(hours=24))
+    app.config.update(SECRET_KEY=get("secret_key"),SESSION_COOKIE_NAME="vpnsid",SESSION_COOKIE_SECURE=panel_https(),SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Strict",MAX_CONTENT_LENGTH=65536,PERMANENT_SESSION_LIFETIME=timedelta(hours=24))
     with LOCK:
         c=db()
         nft_apply(c)
