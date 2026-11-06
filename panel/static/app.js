@@ -525,15 +525,71 @@ el('div',{class:'muted sm cbd'},t(b.d)),
 fill();
 return box
 }
+function sessionsCard(s,onTotp){
+let rng='24h',mode=s.sess_mode||'midnight',totp=!!s.totp_on;
+const DI={mobile:'mobile-screen',tablet:'tablet-screen-button',desktop:'desktop',unknown:'circle-question'};
+const listBox=el('div',{class:'ses'},el('div',{class:'empty'},ic('spinner','fa-spin')));
+const cnt=el('div',{class:'ses-cnt'});
+const tfBox=el('div',{});
+const smBox=el('div',{class:'f'});
+const sp=(c,i,l)=>el('span',{class:'pill '+c},ic(i),l);
+const item=x=>{
+const title=[t('dv_'+(DI[x.dev]?x.dev:'unknown')),x.os,x.br].filter(Boolean).join(' · ');
+const why=!x.live&&x.why?t('se_why_'+x.why):'';
+return el('div',{class:'ses-i'+(x.current?' cur':'')},
+el('div',{class:'ses-h'},el('span',{class:'ico c1'},ic(DI[x.dev]||DI.unknown)),
+el('div',{class:'srow-t'},el('b',{},title),el('div',{class:'ses-p'},x.live?sp('ok','circle-check',t('se_live')):sp('off','circle-minus',t('se_ended')),x.current?sp('','location-dot',t('se_current')):null,why?el('span',{class:'muted sm'},why):null)),
+x.live?el('button',{class:'icon-btn danger',type:'button',title:t('se_close'),onclick:()=>closeSes(x)},ic('right-from-bracket')):null),
+el('div',{class:'ses-d'},kv(t('se_login'),dt(x.created)),kv(t('se_logout'),x.ended?dt(x.ended):'-'),kv(t('se_expiry'),x.exp?dt(x.exp):t('se_never')),kv(t('se_activity'),dt(x.last)),x.ip?kv('IP',x.ip):null))};
+const closeSes=x=>ask(x.current?t('se_close_cur'):t('se_close_confirm'),t('se_close'),async()=>{
+try{await api('POST','/api/sessions/close',{id:x.id});toast(t('se_closed'));if(x.current){setTimeout(()=>{location.href='/login'},600);return}await load()}catch(e){terr(e);return false}});
+const draw=r=>{
+listBox.replaceChildren(...(r.sessions.length?r.sessions.map(item):[el('div',{class:'empty'},t('se_none'))]));
+cnt.replaceChildren(el('div',{class:'ses-c ok'},el('b',{class:'ltr'},r.ok_n),el('span',{},t('se_ok_n'))),el('div',{class:'ses-c bad'},el('b',{class:'ltr'},r.fail_n),el('span',{},t('se_fail_n'))));
+if(r.totp_on!==totp){totp=r.totp_on;drawTf()}};
+async function load(){try{draw(await api('GET','/api/sessions?range='+rng))}catch(e){terr(e)}}
+const setupTf=async()=>{
+let r;try{r=await api('POST','/api/2fa/setup')}catch(e){terr(e);return}
+const key=el('input',{readonly:true,dir:'ltr',value:r.secret});
+const code=el('input',{inputmode:'numeric',autocomplete:'one-time-code',maxlength:7,dir:'ltr',placeholder:'123456'});
+const img=r.qr?el('img',{class:'qr',src:r.qr,alt:'QR',width:200,height:200}):el('div',{class:'muted sm'},t('tf_no_qr'));
+const d=modal(t('tf_setup_t'),el('div',{class:'form'},el('div',{class:'muted sm'},t('tf_scan')),el('div',{class:'qr-w'},img),
+field(t('tf_key'),el('div',{class:'inp-row'},key,el('button',{class:'icon-btn',type:'button',title:t('copy'),onclick:()=>copy(r.secret)},ic('copy'))),t('tf_keep')),
+field(t('tf_code'),code,t('tf_code_hint'))),
+[btn(t('tf_activate'),'check',async()=>{try{await api('POST','/api/2fa/enable',{code:code.value});toast(t('tf_enabled'));d.close();totp=true;onTotp(true);drawTf()}catch(e){terr(e)}},'pri'),btn(t('cancel'),'xmark',()=>d.close())]);
+setTimeout(()=>code.focus(),200)};
+const removeTf=()=>{const p=el('input',{type:'password',autocomplete:'current-password',placeholder:t('tf_pw')});
+ask(t('tf_remove_confirm'),t('tf_remove'),async()=>{try{await api('POST','/api/2fa/disable',{password:p.value});toast(t('tf_removed'));totp=false;onTotp(false);drawTf()}catch(e){terr(e);return false}},{extra:p})};
+function drawTf(){tfBox.replaceChildren(el('div',{class:'srow'},el('span',{class:'ico c1'},ic('shield-halved')),
+el('div',{class:'srow-t'},el('b',{},t('tf_title')),el('div',{},totp?sp('ok','circle-check',t('tf_on')):sp('off','circle-minus',t('tf_off'))),el('div',{class:'muted sm'},t('tf_desc'))),
+totp?el('button',{class:'icon-btn danger',type:'button',title:t('tf_remove'),onclick:removeTf},ic('trash')):el('button',{class:'icon-btn',type:'button',title:t('tf_enable'),onclick:setupTf},ic('plus'))))}
+const SM=['midnight','24h','48h','7d','never'];
+function drawSm(){
+const dp=dd(SM.map(v=>({v,l:t('sm_'+v)})),mode,v=>{
+if(v==='never'){let ok=false;const d=ask(t('sm_warn'),t('confirm'),async()=>{ok=await saveSm(v)},{title:t('sm_confirm_t')});d.addEventListener('close',()=>{if(!ok)drawSm()});return}
+saveSm(v)},260);
+smBox.replaceChildren(el('span',{},t('sm_title')),dp,el('small',{class:'muted'},t('sm_hint')))}
+async function saveSm(v){try{await api('POST','/api/settings',{sess_mode:v});mode=v;toast(t('sm_saved'));return true}catch(e){terr(e);return false}}
+drawTf();drawSm();load();
+return panel('user-shield',t('se_title'),el('div',{class:'form'},
+seg([{v:'24h',l:t('se_r24'),i:'clock'},{v:'7d',l:t('se_r7'),i:'calendar-week'}],rng,v=>{rng=v;load()}),
+listBox,tfBox,cnt,smBox))}
 async function viewSettings(){
 const s=await api('GET','/api/settings');
 const vw=document.documentElement.dataset.view==='desktop'?'desktop':'mobile';
+let totpOn=!!s.totp_on;
+const mkCode=()=>el('input',{inputmode:'numeric',autocomplete:'one-time-code',maxlength:7,dir:'ltr',placeholder:t('tf_code')});
+const xtra=(...a)=>{const cd=totpOn?mkCode():null;const w=el('div',{class:'xtra'},...a,cd);w.code=()=>cd?cd.value:'';return w};
+const cdPw=mkCode();
+const cdF=field(t('tf_code'),cdPw);
+const setCdF=()=>{cdF.style.display=totpOn?'':'none'};
+setCdF();
 const o=el('input',{type:'password',autocomplete:'current-password'});
 const n=el('input',{type:'password',autocomplete:'new-password'});
 const c=el('input',{type:'password',autocomplete:'new-password'});
 const savePw=async()=>{
 if(n.value!==c.value){toast(t('s_mismatch'));return}
-try{await api('POST','/api/password',{old:o.value,new:n.value});toast(t('s_changed'));o.value=n.value=c.value='';setTimeout(()=>{location.href='/login'},1200)}catch(e){terr(e)}
+try{await api('POST','/api/password',{old:o.value,new:n.value,code:cdPw.value});toast(t('s_changed'));o.value=n.value=c.value='';setTimeout(()=>{location.href='/login'},1200)}catch(e){terr(e)}
 };
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
@@ -567,11 +623,11 @@ field(t('s_color_theme'),dd(THEMES.map(x=>({v:x[0],l:t('th_'+x[0]),c:'linear-gra
 drawTheme();
 const row=(icon,title,desc,b)=>el('div',{class:'srow'},el('span',{class:'ico c1'},ic(icon)),el('div',{class:'srow-t'},el('b',{},title),el('div',{class:'muted sm'},desc)),b);
 const pw=el('input',{type:'password',autocomplete:'current-password',placeholder:t('sys_uninstall_pw')});
-const doUninstall=()=>ask(t('sys_uninstall_confirm'),t('sys_uninstall'),async()=>{
-try{await api('POST','/api/system/uninstall',{password:pw.value})}catch(e){terr(e);return false}
+const doUninstall=()=>{const x=xtra(pw);ask(t('sys_uninstall_confirm'),t('sys_uninstall'),async()=>{
+try{await api('POST','/api/system/uninstall',{password:pw.value,code:x.code()})}catch(e){terr(e);return false}
 const ov=overlay(t('sys_w_uninstall'));
 setTimeout(()=>ov.replaceChildren(el('div',{class:'ovl-b'},ic('circle-check','ovl-i ok-i'),el('div',{class:'ovl-t'},t('sys_removed')))),9000)
-},{extra:pw});
+},{extra:x})};
 let tzR=s.tz_region,tzU=!!s.tz_utc;
 const tzNames=(s.tz_list&&s.tz_list.length?s.tz_list:[]).slice();
 if(!tzNames.includes(tzR))tzNames.unshift(tzR);
@@ -582,10 +638,10 @@ const tzApply=()=>{tzBox.classList.toggle('dis',tzU);tzDd.querySelector('.dd-b')
 tzApply();
 const tzSw=sw(tzU,v=>{tzU=v;tzApply();saveTz({tz_utc:v})});
 const pwr=el('input',{type:'password',autocomplete:'current-password',placeholder:t('sys_uninstall_pw')});
-const doReset=()=>ask(t('sys_reset_confirm'),t('sys_reset'),async()=>{
-try{await api('POST','/api/system/reset',{password:pwr.value})}catch(e){terr(e);return false}
+const doReset=()=>{const x=xtra(pwr);ask(t('sys_reset_confirm'),t('sys_reset'),async()=>{
+try{await api('POST','/api/system/reset',{password:pwr.value,code:x.code()})}catch(e){terr(e);return false}
 toast(t('sys_reset_done'));setTimeout(()=>location.reload(),900)
-},{extra:pwr});
+},{extra:x})};
 let dyOn=!!s.decoy_on;
 const dyUrl=el('input',{type:'text',dir:'ltr',maxlength:300,placeholder:'https://example.com',value:s.decoy_url||''});
 const dyBox=el('div',{class:'tzbox'},dyUrl);
@@ -616,7 +672,8 @@ field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}]
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
-panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
+panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
+sessionsCard(s,v=>{totpOn=v;setCdF()}),
 panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
