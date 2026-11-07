@@ -33,7 +33,7 @@ GB=1073741824
 V2=("vless","vmess","trojan")
 PROTOS=("ssh",)+V2
 MODES=("tls","plain")
-TRANSPORTS=("ws","ssl","udp","grpc","xhttp","dns","slowdns")
+TRANSPORTS=("ws","ssl","direct","udp","grpc","xhttp","dns","slowdns")
 V2NETS=("ws","grpc","xhttp")
 UNITDIR="/etc/systemd/system"
 UDPC_DIR="/usr/local/lib/isile/udp-custom"
@@ -57,9 +57,9 @@ SLOWDNS_INFO="/etc/vpnpanel/slowdns.info"
 SLOWDNS_UDP=5301
 SLOWDNS_LOCAL=7001
 DNS_ZONES="/etc/vpnpanel/dnszones"
-COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshssl","plain","sshssl"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","tls","vaydns"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("sshslowdns","tls","slowdns"),("sshslowdns","plain","slowdns"))
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshdirect","plain","sshdirect"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","tls","vaydns"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("sshslowdns","tls","slowdns"),("sshslowdns","plain","slowdns"))
 COMBO_REQ={"vlessdns":"xray","vmessdns":"xray","trojandns":"xray"}
-COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns","slowdns":"slowdns"}
+COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","sshdirect":"ssh","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns","slowdns":"slowdns"}
 REMOVABLE=("wsbridge","udpcustom","xray","vaydns","slowdns")
 PORTS={("vless","tls"):10001,("trojan","tls"):10002,("vmess","tls"):10003,("vless","plain"):10011,("trojan","plain"):10012,("vmess","plain"):10013}
 XPORTS={("vless","tls"):10201,("trojan","tls"):10202,("vmess","tls"):10203,("vless","plain"):10211,("trojan","plain"):10212,("vmess","plain"):10213}
@@ -118,6 +118,8 @@ CREATE INDEX IF NOT EXISTS login_log_ts ON login_log(ts);""")
         c.execute("ALTER TABLE accounts ADD COLUMN ptoken TEXT NOT NULL DEFAULT ''")
     for r in c.execute("SELECT name FROM accounts WHERE ptoken=''").fetchall():
         c.execute("UPDATE accounts SET ptoken=? WHERE name=?",(new_token(),r["name"]))
+    c.execute("UPDATE accounts SET transport='direct',tls='plain' WHERE proto='ssh' AND transport='ssl' AND tls='plain'")
+    c.execute("UPDATE accounts SET tls='tls' WHERE proto='ssh' AND transport='ssl' AND tls!='tls'")
     c.execute("DROP TABLE IF EXISTS v2block")
     c.execute("UPDATE accounts SET conn_limit=0 WHERE proto!='ssh' AND conn_limit!=0")
     c.commit()
@@ -467,6 +469,10 @@ def acct_keys(proto,transport,tls):
     if proto=="ssh":
         if transport=="udp":
             return ["sshudp:udp"]
+        if transport=="direct":
+            return ["sshdirect:plain"]
+        if transport=="ssl":
+            return ["sshssl:tls"]
         base="sshws" if transport=="ws" else "sshdns" if transport=="dns" else "sshslowdns" if transport=="slowdns" else "sshssl"
     else:
         base=proto+"dns" if transport=="dns" else proto
@@ -2171,13 +2177,11 @@ def info(name):
         if want_tls:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+    elif p=="ssh" and r["transport"]=="direct":
+        items=[{"k":"direct_addr","value":"%s:%d@%s:%s"%(dom,ssh_port(),n,s),"rows":2},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="ssl":
-        want_tls=t_on and r["tls"] in ("tls","both")
-        if want_tls:
+        if t_on:
             items.append({"k":"ssl_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
-        if r["tls"] in ("plain","both"):
-            items.append({"k":"ssl_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
-        if want_tls:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh":
@@ -2282,8 +2286,12 @@ def create():
         transport=transport if transport in ("grpc","xhttp","dns") else "ws"
     elif transport in ("grpc","xhttp"):
         return err("bad_values")
-    if transport=="udp":
+    if transport in ("udp","direct"):
         tls="plain"
+    elif transport=="ssl":
+        tls="tls"
+        if not tls_on():
+            return err("combo_disabled",400,"sshssl:tls")
     dk=keys_denied(acct_keys(proto,transport,tls))
     if dk:
         return err("combo_disabled",400,dk)
@@ -2363,13 +2371,17 @@ def edit(name):
                     return err("bad_values")
                 sets["tls"]=d["tls"]
             if d.get("transport"):
-                okt=V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","udp","dns","slowdns")
+                okt=V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","direct","udp","dns","slowdns")
                 if d["transport"] not in okt:
                     return err("bad_values")
                 sets["transport"]=d["transport"]
             ntr=sets.get("transport",r["transport"])
-            if r["proto"]=="ssh" and ntr=="udp":
+            if r["proto"]=="ssh" and ntr in ("udp","direct"):
                 sets["tls"]="plain"
+            elif r["proto"]=="ssh" and ntr=="ssl":
+                sets["tls"]="tls"
+                if ntr!=r["transport"] and not tls_on():
+                    return err("combo_disabled",400,"sshssl:tls")
             ntls=sets.get("tls",r["tls"])
             if (ntls,ntr)!=(r["tls"],r["transport"]):
                 dk=keys_denied(acct_keys(r["proto"],ntr,ntls))
