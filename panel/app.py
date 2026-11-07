@@ -1840,6 +1840,40 @@ def domain_set():
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
+def port_problem(p):
+    """Returns the error code explaining why p cannot be the panel port, or '' when it can."""
+    if not isinstance(p,int) or not 1024<=p<=65535:
+        return "bad_port"
+    if p==panel_port():
+        return "port_same"
+    if p==ssh_port():
+        return "port_ssh"
+    if 10000<=p<=10299 or p in (8000,7000,7001,5300,5301,5302,36712):
+        return "port_reserved"
+    sk=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    try:
+        sk.bind(("0.0.0.0",p))
+    except OSError:
+        return "port_used"
+    finally:
+        sk.close()
+    return ""
+@app.post("/api/panel-port")
+@auth
+def panel_port_set():
+    d=request.get_json(silent=True) or {}
+    try:
+        p=int(str(d.get("port","")).strip())
+    except ValueError:
+        return err("bad_port")
+    e=port_problem(p)
+    if e:
+        return err(e)
+    audit("panel-port",str(p))
+    e=start_job("port",": > %s; /usr/local/bin/isile port %d >>%s 2>&1"%(LOGF,p,LOGF))
+    if e:
+        return err("system",500,e)
+    return jsonify(ok=True,port=p)
 LATEST_URL="https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/main/panel/VERSION"
 @app.get("/api/system/latest")
 @auth

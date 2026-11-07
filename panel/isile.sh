@@ -303,6 +303,16 @@ fi
 ufw delete allow "$old/tcp" >/dev/null 2>&1
 return 0
 }
+port_cli(){
+local p="${1:-}" why
+load
+[[ "$p" =~ ^[0-9]+$ ]] || { echo "invalid port"; return 1; }
+p=$((10#$p))
+why="$(port_bad "$p")"
+[ -z "$why" ] || { echo "port $p cannot be used: $why"; return 1; }
+apply_port "$PORT" "$p" || return 1
+echo "panel port changed to $p"
+}
 change_port(){
 local p why old
 load
@@ -637,11 +647,12 @@ case "$c" in
 esac
 done
 }
-usage(){ echo "Usage: isile            open the management menu"; echo "       isile info       show panel information"; echo "       isile update     update to the latest version"; echo "       isile uninstall  remove the panel completely"; }
+usage(){ echo "Usage: isile            open the management menu"; echo "       isile info       show panel information"; echo "       isile update     update to the latest version"; echo "       isile port N     change the panel port"; echo "       isile uninstall  remove the panel completely"; }
 case "${1:-}" in
 "") if [ -t 0 ] && [ -t 1 ]; then menu; else echo "The isile menu needs an interactive terminal (use: isile info)"; exit 1; fi;;
 info) echo "=================================================="; echo "  isile panel info"; echo "=================================================="; show_info; echo "==================================================";;
 update) update;;
+port) port_cli "${2:-}";;
 uninstall) uninstall "${2:-}";;
 4) update;;
 3) if [ "${2:-}" = "--yes" ]; then uninstall --yes; else usage; exit 1; fi;;
