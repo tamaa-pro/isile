@@ -499,6 +499,7 @@ esac
 echo
 yn "$q" || { cancelled; return 9; }
 echo
+if [ "$ALT" = 1 ]; then printf '\e[?25h\e[?1049l'; ALT=0; fi
 update
 UPDATED=1
 }
@@ -642,7 +643,7 @@ case "$c" in
 7) run_screen "Reset panel" reset_panel;;
 8) run_screen "Delete panel" delete_panel; [ "$UPDATED" = 1 ] && break;;
 9) run_screen "Restart panel" restart_panel;;
-10) if job_busy; then busy_msg; else screen "Update panel"; update_panel; rc=$?; [ "$rc" = 9 ] || pause; [ "$UPDATED" = 1 ] && break; check_update; fi;;
+10) if job_busy; then busy_msg; else screen "Update panel"; update_panel; rc=$?; if [ "$UPDATED" = 1 ]; then break; fi; [ "$rc" = 9 ] || pause; check_update; fi;;
 *) NOTE="Invalid choice: $c";;
 esac
 done
