@@ -610,7 +610,7 @@ verify(true);
 const applyDom=()=>{
 const d=dom.value.trim().toLowerCase();
 if(!d){toast(t('e_bad_domain'));return}
-ask(t('dm_confirm',d),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+':2080/')},{danger:false})
+ask(t('dm_confirm',d),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+(location.port?':'+location.port:'')+'/')},{danger:false})
 };
 let bv=s.cap_basis;
 const basisDd=dd([{v:'total',l:t('basis_total')},{v:'out',l:t('basis_out')}],bv,v=>{bv=v});
