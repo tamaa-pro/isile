@@ -38,6 +38,22 @@ ip="$(curl -fsS4 --max-time 8 https://checkip.amazonaws.com 2>/dev/null | tr -d 
 echo "$ip"
 }
 dbget(){ python3 -c 'import sqlite3,sys;r=sqlite3.connect(sys.argv[1]).execute("SELECT v FROM settings WHERE k=?",(sys.argv[2],)).fetchone();print(r[0] if r else "")' "$DATA/panel.db" "$1"; }
+port_bad(){
+# Prints why $1 cannot be the panel port (nothing when it is fine). $2=nginx: a listener that is nginx does not count (re-install).
+local p="$1" sp lst
+[[ "$p" =~ ^[0-9]{1,5}$ ]] || { echo "it is not a number"; return 0; }
+p=$((10#$p))
+if [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then echo "it must be between 1024 and 65535"; return 0; fi
+sp="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)"
+sp="${sp:-22}"
+if [ "$p" = "$sp" ]; then echo "it is the SSH port"; return 0; fi
+if { [ "$p" -ge 10000 ] && [ "$p" -le 10299 ]; } || [ "$p" = 8000 ] || [ "$p" = 7000 ] || [ "$p" = 7001 ] || [ "$p" = 5300 ] || [ "$p" = 5301 ] || [ "$p" = 5302 ] || [ "$p" = 36712 ]; then echo "it is reserved for an internal service"; return 0; fi
+lst=""
+if command -v ss >/dev/null 2>&1; then lst="$(ss -H -ltnp "sport = :$p" 2>/dev/null || true)"
+elif timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$p" 2>/dev/null; then lst=busy; fi
+if [ "${2:-}" = nginx ]; then lst="$(echo "$lst" | grep -v '"nginx"' || true)"; fi
+if [ -n "$lst" ]; then echo "another program is already listening on it"; return 0; fi
+}
 L(){
 echo "+ $*" >>"$LOG"
 if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
@@ -53,6 +69,7 @@ VAYDNS_DOM=""
 WANT_XRAY=1
 WANT_WS=1
 SELFSIGNED=no
+PANEL_PORT=2080
 if [ "$MODE" = install ]; then
 STEP="reading settings"
 read -rp "Domain (press Enter to skip and use the server address without TLS): " DOMAIN </dev/tty
@@ -64,9 +81,23 @@ read -rp "Email for certificate notices (optional): " EMAIL </dev/tty
 else
 echo "No domain: the panel will be served over plain HTTP unless you create a self-signed certificate."
 echo "(A self-signed certificate encrypts the connection but the browser will show a warning.)"
-read -rp "Create a self-signed certificate for the panel (HTTPS on port 2080)? [y/N]: " YN </dev/tty
+read -rp "Create a self-signed certificate for the panel (HTTPS on the panel port)? [y/N]: " YN </dev/tty
 if [[ "$YN" =~ ^[Yy]$ ]]; then SELFSIGNED=yes; fi
 fi
+if [ -n "${ISILE_PANEL_PORT:-}" ]; then
+PANEL_PORT="${ISILE_PANEL_PORT}"
+R="$(port_bad "$PANEL_PORT" nginx)"
+[ -z "$R" ] || die "invalid panel port $PANEL_PORT: $R"
+else
+while true; do
+read -rp "Panel port (press Enter for 2080): " PANEL_PORT </dev/tty
+PANEL_PORT="${PANEL_PORT:-2080}"
+R="$(port_bad "$PANEL_PORT" nginx)"
+[ -z "$R" ] && break
+echo "Port $PANEL_PORT cannot be used: $R"
+done
+fi
+PANEL_PORT=$((10#$PANEL_PORT))
 read -rp "Admin username: " ADMIN_USER </dev/tty
 [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "username must be 3-32 chars of A-Za-z0-9_.-"
 read -rsp "Admin password (min 10 chars): " ADMIN_PASS </dev/tty; echo
@@ -112,6 +143,8 @@ STEP="reading current settings"
 if [ "$(dbget comp_xray)" = 0 ]; then WANT_XRAY=0; fi
 if [ "$(dbget comp_wsbridge)" = 0 ]; then WANT_WS=0; fi
 DOMAIN="$(dbget domain)"
+PANEL_PORT="$(dbget port_panel)"
+if ! [[ "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PANEL_PORT" -lt 1024 ] || [ "$PANEL_PORT" -gt 65535 ]; then PANEL_PORT=2080; fi
 SERVER_IP="$(detect_ip)"
 EMAIL=""
 fi
@@ -277,7 +310,7 @@ ProtectHome=true
 WantedBy=multi-user.target
 EOT
 if [ "$MODE" = install ]; then
-VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" VPN_SERVER_IP="$SERVER_IP" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
+VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" VPN_SERVER_IP="$SERVER_IP" VPN_PANEL_PORT="$PANEL_PORT" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
 else
 if [ -n "$SERVER_IP" ]; then VPN_SERVER_IP="$SERVER_IP" "$APP/venv/bin/python" "$APP/panel/app.py" setserver >>"$LOG" 2>&1 || true; fi
 fi
@@ -291,12 +324,12 @@ chmod 644 /etc/vpnpanel/selfsigned/cert.pem
 "$APP/venv/bin/python" "$APP/panel/app.py" setselfsigned >>"$LOG" 2>&1 || die "could not save the self-signed certificate setting"
 fi
 install -m755 "$APP/panel/isile.sh" /usr/local/bin/isile
-STEP="restoring default ports"
-OLDP="$(dbget port_http) $(dbget port_https) $(dbget port_panel)"
-python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=30);[c.execute("DELETE FROM settings WHERE k=?",(k,)) for k in ("port_http","port_https","port_panel")];c.commit()' "$DATA/panel.db" >>"$LOG" 2>&1 || true
+STEP="cleaning legacy port settings"
+OLDP="$(dbget port_http) $(dbget port_https)"
+python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=30);[c.execute("DELETE FROM settings WHERE k=?",(k,)) for k in ("port_http","port_https")];c.commit()' "$DATA/panel.db" >>"$LOG" 2>&1 || true
 rm -f /etc/vpnpanel/ports.env
 for p in $OLDP; do
-case "$p" in 80|443|2080|"") ;; *) ufw delete allow "$p/tcp" >>"$LOG" 2>&1 || true;; esac
+case "$p" in 80|443|"$PANEL_PORT"|"") ;; *) ufw delete allow "$p/tcp" >>"$LOG" 2>&1 || true;; esac
 done
 UCF=/usr/local/lib/isile/udp-custom/config.json
 if [ -s "$UCF" ]; then
@@ -335,7 +368,7 @@ echo "[8/8] Starting services"
 L ufw allow "$SSH_PORT/tcp"
 L ufw allow 80/tcp
 if [ -n "$DOMAIN" ]; then L ufw allow 443/tcp; fi
-L ufw allow 2080/tcp
+L ufw allow "$PANEL_PORT/tcp"
 L ufw --force enable
 L systemctl daemon-reload
 EN="vpnpanel vpnmux"
@@ -427,34 +460,34 @@ elif [ "$(dbget selfsigned)" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ]; 
 else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
 CODE=000
 for i in $(seq 1 20); do
-CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:2080/login" || true)"
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:$PANEL_PORT/login" || true)"
 [ "$CODE" = 200 ] && break
 sleep 1
 done
 if [ "$CODE" != 200 ]; then
 journalctl -u vpnpanel -n 12 --no-pager >>"$LOG" 2>&1 || true
-die "the panel did not answer on port 2080 (HTTP $CODE)"
+die "the panel did not answer on port $PANEL_PORT (HTTP $CODE)"
 fi
 echo
 echo "=================================================="
 if [ "$MODE" = update ]; then
 echo "  isile updated successfully ($OLDV -> $NEWV)"
 echo "=================================================="
-echo " Panel URL : $SCHEME://$PUB:2080"
+echo " Panel URL : $SCHEME://$PUB:$PANEL_PORT"
 echo " Your admin credentials were not changed."
 else
 echo "  isile $NEWV installed successfully"
 echo "=================================================="
-echo " Panel URL : $SCHEME://$PUB:2080"
+echo " Panel URL : $SCHEME://$PUB:$PANEL_PORT"
 echo " Username  : $ADMIN_USER"
 echo " Password  : $ADMIN_PASS"
 echo "--------------------------------------------------"
 if [ -n "$DOMAIN" ]; then
-echo " Open ports 80, 443, 2080 and your SSH port in the cloud firewall."
+echo " Open ports 80, 443, $PANEL_PORT and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS) and 443 (TLS via stunnel)."
 else
 if [ "$SCHEME" = https ]; then echo " No domain: the panel uses a self-signed certificate (the browser will warn once); connections use plain HTTP without TLS."; else echo " No domain: the panel and connections use plain HTTP without TLS."; fi
-echo " Open ports 80, 2080 and your SSH port in the cloud firewall."
+echo " Open ports 80, $PANEL_PORT and your SSH port in the cloud firewall."
 echo " SSH SSL: direct SSH on 80 (no TLS). TLS needs a domain."
 echo " You can add a domain later from the panel Settings."
 fi
@@ -470,10 +503,7 @@ else
 echo " VayDNS is installed but has no tunnel domain yet: set it in Settings > Components, then add its NS record and open UDP 53."
 fi
 fi
-echo " Type  isile  to open the management menu:"
-echo "   1) Edit admin credentials"
-echo "   2) Show panel info"
-echo "   3) Uninstall panel completely"
-echo "   4) Update to the latest version"
+echo " Type  isile  to open the management menu (admin account, two-step verification,"
+echo " domain, panel port, services, reset, restart, update and uninstall)."
 fi
 echo "=================================================="
