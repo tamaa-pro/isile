@@ -1550,6 +1550,19 @@ def cert_info(dom):
     except ValueError:
         return None
     return {"expires":int(e.timestamp()),"days_left":int((e-datetime.now(timezone.utc)).total_seconds()//86400)}
+CF_NETS=['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22']
+CF_HTTPS_PORTS=(443,2053,2083,2087,2096,8443)
+def is_cf(ips):
+    """True when any of the addresses belongs to Cloudflare (the domain is behind its orange-cloud proxy)."""
+    import ipaddress
+    nets=[ipaddress.ip_network(n) for n in CF_NETS]
+    for a in ips:
+        try:
+            if any(ipaddress.ip_address(a) in n for n in nets):
+                return True
+        except ValueError:
+            pass
+    return False
 def dns_of(dom):
     try:
         return sorted({a[4][0] for a in socket.getaddrinfo(dom,None,socket.AF_INET)})
@@ -1797,7 +1810,8 @@ def domain_get():
         return err("bad_domain")
     ip=get("server_ip","")
     dns=dns_of(cand) if cand else []
-    return jsonify(domain=cur,candidate=cand,server_ip=ip,dns=dns,match=bool(ip and ip in dns),cert=cert_info(cand))
+    pp=panel_port()
+    return jsonify(domain=cur,candidate=cand,server_ip=ip,dns=dns,match=bool(ip and ip in dns),cert=cert_info(cand),cf=is_cf(dns),panel_port=pp,cf_port_ok=pp in CF_HTTPS_PORTS)
 def start_job(kind,cmd):
     if os.path.exists(RCF):
         os.unlink(RCF)
@@ -2459,6 +2473,8 @@ def main():
         puts({"totp_secret":sec,"totp_last":n})
         audit("2fa-enabled-terminal")
         return
+    if cmd=="cfip":
+        sys.exit(0 if is_cf(sys.argv[2:]) else 1)
     if cmd=="comps":
         c=db()
         try:

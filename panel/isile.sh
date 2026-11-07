@@ -248,7 +248,14 @@ d="$(printf '%s' "$d" | tr 'A-Z' 'a-z' | tr -d ' ')"
 if [ "$d" = "$VDOM" ] || [ "$d" = "$SDOM" ]; then bad "That name is a DNS tunnel domain, choose a different one"; return; fi
 dip="$(getent ahostsv4 "$d" 2>/dev/null | awk 'NR==1{print $1}')"
 kv "Resolves to" "${dip:-nothing}"
-if [ -n "$IP" ] && [ "$dip" = "$IP" ]; then ok "The domain points to this server."
+if [ -n "$dip" ] && "$PY" "$APP/panel/app.py" cfip $dip; then
+warn "Cloudflare proxy detected (orange cloud): that is why it differs from this server."
+info "Direct SSH and the other ports do not go through it: use a DNS only"
+info "(grey cloud) name for those. If the certificate fails, switch to grey"
+info "cloud for a moment and turn off Always Use HTTPS."
+case "$PORT" in 443|2053|2083|2087|2096|8443) ;; *) warn "Panel port $PORT is not supported by the proxy: use option 4 (2053, 2083, 2087, 2096 or 8443).";; esac
+yn "Continue?" || { cancelled; return 9; }
+elif [ -n "$IP" ] && [ "$dip" = "$IP" ]; then ok "The domain points to this server."
 else
 warn "The domain does not point to this server ($IP). The certificate will fail until its A record is fixed."
 yn "Continue anyway?" || { cancelled; return 9; }
