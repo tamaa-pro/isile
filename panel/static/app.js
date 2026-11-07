@@ -142,7 +142,7 @@ const loop=async()=>{
 try{
 const j=await api('GET','/api/system/job');
 fails=0;
-if(j.state==='done'){o.remove();if(j.rc===0){toast(t('job_ok'));setTimeout(()=>location.reload(),900)}else logDlg(j.log);return}
+if(j.state==='done'){o.remove();if(j.rc===0){toast(t('job_ok'));setTimeout(()=>{if(redirect)location.href=redirect;else location.reload()},900)}else logDlg(j.log);return}
 if(j.state==='none'&&Date.now()-t0>20000){o.remove();location.reload();return}
 }catch(e){fails++;if(redirect&&fails>=3){location.href=redirect;return}}
 if(Date.now()-t0>600000){o.remove();return}
@@ -599,8 +599,8 @@ try{await api('POST','/api/password',{old:o.value,new:n.value,code:cdPw.value});
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
 const res=el('div',{class:'kvs cols full box'});
-let ppNow=2080;
-const showDom=r=>{ppNow=r.panel_port||2080;res.replaceChildren(...[
+let ppNow=2080,ppDirty=false;
+const showDom=r=>{ppNow=r.panel_port||2080;if(!ppDirty)ppIn.value=ppNow;res.replaceChildren(...[
 kv(t('dm_current'),r.domain||t('dm_none')),
 kv(t('dm_server_ip'),r.server_ip||'—'),
 kv(t('dm_dns'),r.dns.length?r.dns.join(', '):'—',r.candidate?(r.cf?pill('warn',t('dm_cf')):pill(r.match?'ok':'bad',r.match?t('dm_match'):t('dm_nomatch'))):null),
@@ -614,6 +614,14 @@ const applyDom=()=>{
 const d=dom.value.trim().toLowerCase();
 if(!d){toast(t('e_bad_domain'));return}
 ask(t('dm_confirm',d,ppNow),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+(location.port?':'+location.port:'')+'/')},{danger:false})
+};
+const ppIn=el('input',{type:'number',min:1024,max:65535,step:1,value:ppNow,dir:'ltr',style:'max-width:9rem'});
+ppIn.addEventListener('input',()=>{ppDirty=true});
+const savePort=()=>{
+const p=parseInt(ppIn.value,10);
+if(!(p>=1024&&p<=65535)){toast(t('e_bad_port'));return}
+if(p===ppNow){toast(t('e_port_same'));return}
+ask(t('pp_confirm',p),t('pp_save'),()=>runJob('/api/panel-port',{port:p},t('pp_working'),location.protocol+'//'+location.hostname+':'+p+'/'),{danger:false})
 };
 let bv=s.cap_basis;
 const basisDd=dd([{v:'total',l:t('basis_total')},{v:'out',l:t('basis_out')}],bv,v=>{bv=v});
@@ -682,7 +690,7 @@ el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('spa
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
 panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
 sessionsCard(s,v=>{totpOn=v;setCdF()}),
-panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))))),
+panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))),field(t('pp_label'),ppIn,t('pp_hint')),el('div',{class:'row'},btn(t('pp_save'),'floppy-disk',savePort,'pri')))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
