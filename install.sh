@@ -425,9 +425,10 @@ journalctl -u slowdns -n 12 --no-pager >>"$LOG" 2>&1 || true
 echo "Warning: SlowDNS is not running (optional component, see $LOG). You can remove it from Settings > Components."
 fi
 STEP="verifying connection paths"
+install -d /var/www/certbot
 CODE=000
 for i in $(seq 1 15); do
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1/ || true)"
+CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1/.well-known/acme-challenge/isile-probe || true)"
 [ "$CODE" = 404 ] && break
 sleep 1
 done
@@ -438,7 +439,7 @@ fi
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 CODE=000
 for i in $(seq 1 15); do
-CODE="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/" || true)"
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/.well-known/acme-challenge/isile-probe" || true)"
 [ "$CODE" = 404 ] && break
 sleep 1
 done
