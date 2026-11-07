@@ -69,7 +69,7 @@ VAYDNS_DOM=""
 WANT_XRAY=1
 WANT_WS=1
 SELFSIGNED=no
-PANEL_PORT=2080
+PANEL_PORT=2096
 if [ "$MODE" = install ]; then
 STEP="reading settings"
 read -rp "Domain (press Enter to skip and use the server address without TLS): " DOMAIN </dev/tty
@@ -90,8 +90,8 @@ R="$(port_bad "$PANEL_PORT" nginx)"
 [ -z "$R" ] || die "invalid panel port $PANEL_PORT: $R"
 else
 while true; do
-read -rp "Panel port (press Enter for 2080): " PANEL_PORT </dev/tty
-PANEL_PORT="${PANEL_PORT:-2080}"
+read -rp "Panel port (press Enter for 2096; Cloudflare proxy supports 2053, 2083, 2087, 2096, 8443): " PANEL_PORT </dev/tty
+PANEL_PORT="${PANEL_PORT:-2096}"
 R="$(port_bad "$PANEL_PORT" nginx)"
 [ -z "$R" ] && break
 echo "Port $PANEL_PORT cannot be used: $R"
@@ -112,9 +112,23 @@ if [ -n "$DOMAIN" ]; then
 STEP="checking DNS"
 DOM_IP="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}' || true)"
 if [ "$SERVER_IP" != "$DOM_IP" ]; then
+if python3 - "$DOM_IP" <<'PYCF' 2>/dev/null
+import ipaddress,sys
+N="173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22".split()
+sys.exit(0 if any(ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(n) for n in N) else 1)
+PYCF
+then
+echo "Notice: $DOMAIN is behind the Cloudflare proxy (orange cloud), that is why it differs from this server ($SERVER_IP)."
+echo "  - Certificate issuance can fail: if it does, switch the record to DNS only (grey cloud) and turn off Always Use HTTPS, then run the installer again."
+echo "  - The panel port must be one Cloudflare proxies: 2053, 2083, 2087, 2096 or 8443."
+echo "  - Direct SSH and the other ports do not go through the proxy: use a grey-cloud name for them."
+read -rp "Continue? [y/N]: " YN </dev/tty
+[[ "$YN" =~ ^[Yy]$ ]] || die "cancelled"
+else
 echo "Warning: $DOMAIN resolves to '${DOM_IP:-nothing}' but this server is $SERVER_IP"
 read -rp "Continue anyway? [y/N]: " YN </dev/tty
 [[ "$YN" =~ ^[Yy]$ ]] || die "domain does not point to this server"
+fi
 fi
 fi
 STEP="optional components"
@@ -144,7 +158,7 @@ if [ "$(dbget comp_xray)" = 0 ]; then WANT_XRAY=0; fi
 if [ "$(dbget comp_wsbridge)" = 0 ]; then WANT_WS=0; fi
 DOMAIN="$(dbget domain)"
 PANEL_PORT="$(dbget port_panel)"
-if ! [[ "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PANEL_PORT" -lt 1024 ] || [ "$PANEL_PORT" -gt 65535 ]; then PANEL_PORT=2080; fi
+if ! [[ "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PANEL_PORT" -lt 1024 ] || [ "$PANEL_PORT" -gt 65535 ]; then PANEL_PORT=2080; python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=30);c.execute("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",("port_panel","2080"));c.commit()' "$DATA/panel.db" || true; fi
 SERVER_IP="$(detect_ip)"
 EMAIL=""
 fi
