@@ -83,6 +83,7 @@ listen 127.0.0.1:10443 proxy_protocol;
 $RIP
 server_name _;
 server_tokens off;
+location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
 location ^~ /vless-xhttp { proxy_pass http://127.0.0.1:10201; $XH }
 location ^~ /vmess-xhttp { proxy_pass http://127.0.0.1:10203; $XH }
 location ^~ /trojan-xhttp { proxy_pass http://127.0.0.1:10202; $XH }
@@ -180,6 +181,22 @@ VPN_DOMAIN="$d" "$APP/venv/bin/python" "$APP/panel/app.py" setdomain
 systemctl reload nginx
 echo "domain $d enabled"
 systemctl restart vpnpanel
+PP="$(dbget port_panel)"
+[[ "$PP" =~ ^[0-9]{4,5}$ ]] || PP=2080
+CODE=000
+for i in $(seq 1 20); do
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 4 "https://127.0.0.1:$PP/login" || true)"
+[ "$CODE" = 200 ] && break
+sleep 1
+done
+if [ "$CODE" != 200 ]; then
+echo "the panel does not answer on https://127.0.0.1:$PP/login (HTTP $CODE)"
+nginx -t 2>&1 || true
+ss -ltnp 2>&1 | grep -E ":($PP|443|80) " || true
+journalctl -u nginx -n 8 --no-pager 2>&1 || true
+journalctl -u vpnpanel -n 8 --no-pager 2>&1 || true
+exit 1
+fi
 }
 case "${1:-}" in
 --render) render "${2:-}";;
