@@ -599,18 +599,21 @@ try{await api('POST','/api/password',{old:o.value,new:n.value,code:cdPw.value});
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
 const res=el('div',{class:'kvs cols full box'});
-const showDom=r=>res.replaceChildren(...[
+let ppNow=2080;
+const showDom=r=>{ppNow=r.panel_port||2080;res.replaceChildren(...[
 kv(t('dm_current'),r.domain||t('dm_none')),
 kv(t('dm_server_ip'),r.server_ip||'—'),
-kv(t('dm_dns'),r.dns.length?r.dns.join(', '):'—',r.candidate?pill(r.match?'ok':'bad',r.match?t('dm_match'):t('dm_nomatch')):null),
+kv(t('dm_dns'),r.dns.length?r.dns.join(', '):'—',r.candidate?(r.cf?pill('warn',t('dm_cf')):pill(r.match?'ok':'bad',r.match?t('dm_match'):t('dm_nomatch'))):null),
 kv(t('dm_cert'),r.cert?t('dm_cert_days',r.cert.days_left)+' ('+dtd(r.cert.expires)+')':t('dm_cert_none')),
-r.candidate&&!r.match?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',r.candidate,r.server_ip||'—')):null].filter(Boolean));
+r.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_cf_note')):null,
+r.cf&&!r.cf_port_ok?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_cf_port',r.panel_port)):null,
+r.candidate&&!r.match&&!r.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',r.candidate,r.server_ip||'—')):null].filter(Boolean))};
 const verify=async(quiet)=>{try{const r=await api('GET','/api/domain'+(dom.value.trim()?'?d='+encodeURIComponent(dom.value.trim().toLowerCase()):''));showDom(r);if(!quiet)toast(t('dm_checked'))}catch(e){terr(e)}};
 verify(true);
 const applyDom=()=>{
 const d=dom.value.trim().toLowerCase();
 if(!d){toast(t('e_bad_domain'));return}
-ask(t('dm_confirm',d),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+(location.port?':'+location.port:'')+'/')},{danger:false})
+ask(t('dm_confirm',d,ppNow),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+(location.port?':'+location.port:'')+'/')},{danger:false})
 };
 let bv=s.cap_basis;
 const basisDd=dd([{v:'total',l:t('basis_total')},{v:'out',l:t('basis_out')}],bv,v=>{bv=v});
