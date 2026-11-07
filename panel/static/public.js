@@ -15,7 +15,7 @@ function tools(){
 const th=document.documentElement.dataset.theme;
 $('#tools').replaceChildren(
 el('button',{class:'icon-btn',title:t('s_language'),onclick:()=>{const v=LANG==='ar'?'en':'ar';try{localStorage.setItem('lang',v)}catch(e){}LANG=v;const d=document.documentElement;d.lang=v;d.dir=v==='ar'?'rtl':'ltr';tools();draw()}},ic('language')),
-el('button',{class:'icon-btn',title:t('s_theme'),onclick:()=>{const v=document.documentElement.dataset.theme==='light'?'dark':'light';try{localStorage.setItem('theme',v)}catch(e){}document.documentElement.dataset.theme=v;tools()}},ic(th==='light'?'moon':'sun')))
+el('button',{class:'icon-btn',title:t('s_theme'),onclick:()=>{const v=document.documentElement.dataset.theme==='light'?'dark':'light';try{localStorage.setItem('theme',v);localStorage.setItem('inv','0')}catch(e){}delete document.documentElement.dataset.inv;document.documentElement.dataset.theme=v;tools()}},ic(th==='light'?'moon':'sun')))
 }
 function draw(){
 document.title=(D&&D.name)||'VPN';
