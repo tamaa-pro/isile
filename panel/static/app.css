@@ -415,3 +415,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 :root[data-inv]:not([data-theme=dark]):not([data-theme=gray]):not([data-theme=light]) body{background:radial-gradient(900px 520px at 85% -8%,rgba(var(--hl),.38),transparent 62%),radial-gradient(760px 460px at 0% 100%,rgba(var(--hl2),.26),transparent 58%),linear-gradient(160deg,var(--bg2),var(--bg));background-attachment:fixed}
 .f2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
 .cols>.dc>.f2{flex:1 1 100%}
+.seg.sq6{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.seg.sq6 button span{text-align:center;line-height:1.25}
+@media(max-width:720px){.seg.sq6 button{padding:8px 2px;gap:4px;font-size:13px;min-width:0}.seg.sq6 button i{display:none}}
+@media(max-width:400px){.seg.sq6 button{font-size:12px}}
+.m-sshslowdns i{background:linear-gradient(90deg,#f97316,#fdba74)}
+.p-sshslowdns{background:rgba(249,115,22,.16);color:#fb923c}
+.m-sshdirect i{background:linear-gradient(90deg,#10b981,#6ee7b7)}
+.p-sshdirect{background:rgba(16,185,129,.16);color:#34d399}
