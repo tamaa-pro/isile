@@ -6,7 +6,7 @@ dbget(){ python3 -c 'import sqlite3,sys;r=sqlite3.connect(sys.argv[1],timeout=10
 LOG=/var/log/isile-install.log
 [ "$(id -u)" -eq 0 ] || { echo "run as root"; exit 1; }
 render(){
-local d="${1:-}" tls=0 LST SSL HSTS PROTO WS SSHWS RIP GRPC_COMMON XH DON DURL DECOY DRE
+local d="${1:-}" tls=0 PP LST SSL HSTS PROTO WS SSHWS RIP GRPC_COMMON XH DON DURL DECOY DRE
 if [ -n "$d" ] && [ -s "/etc/letsencrypt/live/$d/fullchain.pem" ]; then tls=1; fi
 WS='proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $remote_addr; proxy_read_timeout 1d; proxy_send_timeout 1d; proxy_buffering off;'
 # What a plain visitor (browser, curl) gets from the domain: nothing by default (connection closed, 444).
@@ -24,17 +24,19 @@ RIP='set_real_ip_from 127.0.0.1; real_ip_header proxy_protocol;'
 GRPC_COMMON='client_max_body_size 0; client_body_timeout 1d; grpc_read_timeout 1d; grpc_send_timeout 1d; grpc_socket_keepalive on; grpc_set_header X-Real-IP $remote_addr;'
 # XHTTP: HTTP/1.1 clients go through proxy_pass without buffering, HTTP/2 clients through grpc_pass (same as gRPC, recommended by Xray)
 XH='proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $remote_addr; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; client_body_timeout 1d; proxy_read_timeout 1d; proxy_send_timeout 1d;'
-LST='listen 2080; listen [::]:2080;'
+PP="$(dbget port_panel)"
+[[ "$PP" =~ ^[0-9]{4,5}$ ]] && [ "$PP" -ge 1024 ] && [ "$PP" -le 65535 ] || PP=2080
+LST="listen $PP; listen [::]:$PP;"
 SSL=""
 HSTS=""
 PROTO=http
 if [ "$tls" = 1 ]; then
-LST='listen 2080 ssl; listen [::]:2080 ssl;'
+LST="listen $PP ssl; listen [::]:$PP ssl;"
 SSL="ssl_certificate /etc/letsencrypt/live/$d/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$d/privkey.pem; ssl_protocols TLSv1.2 TLSv1.3; ssl_session_cache shared:vpnssl:10m; ssl_session_timeout 1d; ssl_session_tickets off;"
 HSTS='add_header Strict-Transport-Security "max-age=31536000" always;'
 PROTO=https
 elif [ -z "$d" ] && [ "$(dbget selfsigned)" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ] && [ -s /etc/vpnpanel/selfsigned/key.pem ]; then
-LST='listen 2080 ssl; listen [::]:2080 ssl;'
+LST="listen $PP ssl; listen [::]:$PP ssl;"
 SSL="ssl_certificate /etc/vpnpanel/selfsigned/cert.pem; ssl_certificate_key /etc/vpnpanel/selfsigned/key.pem; ssl_protocols TLSv1.2 TLSv1.3; ssl_session_cache shared:vpnssl:10m; ssl_session_timeout 1d; ssl_session_tickets off;"
 PROTO=https
 fi

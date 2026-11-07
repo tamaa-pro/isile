@@ -170,6 +170,10 @@ def tls_on():
     return bool(get("domain",""))
 def panel_https():
     return tls_on() or (get("selfsigned","0")=="1" and os.path.isfile(SELFSIGNED_CERT))
+def panel_port():
+    """Panel port chosen at install or from the terminal menu (nginx listens on it). Default 2080."""
+    v=get("port_panel","")
+    return int(v) if re.fullmatch(r"[0-9]{2,5}",v or "") and 1024<=int(v)<=65535 else 2080
 def sh(args,inp=None):
     return subprocess.run(args,input=inp,capture_output=True,text=True,timeout=40)
 def gen_pass():
@@ -681,7 +685,7 @@ def speed_of(n):
         return 0,0
     return int(sp[0]),int(sp[1])
 def page_url(key):
-    return "%s://%s:2080/%s"%("https" if panel_https() else "http",host(),key)
+    return "%s://%s:%d/%s"%("https" if panel_https() else "http",host(),panel_port(),key)
 def public_on():
     return get("public_page","0")=="1"
 def token_mode():
@@ -1496,7 +1500,7 @@ def listening_udp():
 def ports_info():
     ls=listening_ports()
     t=tls_on()
-    rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",2080,True,ls)]
+    rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",panel_port(),True,ls)]
     if comp_installed("udpcustom"):
         rows.append(("udp",udp_port(),comp_on("udpcustom"),listening_udp()))
     if comp_installed("vaydns") or comp_installed("slowdns"):
@@ -1849,7 +1853,7 @@ def sys_restart():
 @auth
 def sys_update():
     audit("system-update")
-    e=start_job("update","/usr/local/bin/isile 4")
+    e=start_job("update","/usr/local/bin/isile update")
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
@@ -1861,18 +1865,12 @@ def sys_uninstall():
     if e:
         return err(e,429 if e=="too_many" else 400)
     audit("system-uninstall")
-    e=start_job("uninstall","/usr/local/bin/isile 3 --yes")
+    e=start_job("uninstall","/usr/local/bin/isile uninstall --yes")
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
-@app.post("/api/system/reset")
-@auth
-def sys_reset():
-    d=request.get_json(silent=True) or {}
-    e=pw_check(str(d.get("password",""))) or code_check(d.get("code"))
-    if e:
-        return err(e,429 if e=="too_many" else 400)
-    audit("system-reset")
+def do_reset():
+    """Delete every account and reset usage and settings. Returns '' or an error text."""
     with LOCK:
         c=db()
         try:
@@ -1889,11 +1887,23 @@ def sys_reset():
             xray_sync(c)
         except Exception as e:
             traceback.print_exc()
-            return err("system",500,str(e)[-300:])
+            return str(e)[-300:] or "error"
         finally:
             c.close()
         for m in (CONN,ACTIVE,SPEED,SP_B,SSH_OVER):
             m.clear()
+    return ""
+@app.post("/api/system/reset")
+@auth
+def sys_reset():
+    d=request.get_json(silent=True) or {}
+    e=pw_check(str(d.get("password",""))) or code_check(d.get("code"))
+    if e:
+        return err(e,429 if e=="too_many" else 400)
+    audit("system-reset")
+    e=do_reset()
+    if e:
+        return err("system",500,e)
     return jsonify(ok=True)
 @app.get("/api/system/job")
 @auth
@@ -2412,6 +2422,8 @@ def main():
         put("admin_user",os.environ["VPN_ADMIN_USER"])
         put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
         puts({"domain":os.environ.get("VPN_DOMAIN",""),"server_ip":os.environ.get("VPN_SERVER_IP","")})
+        if re.fullmatch(r"[0-9]{4,5}",os.environ.get("VPN_PANEL_PORT","")) and 1024<=int(os.environ["VPN_PANEL_PORT"])<=65535:
+            put("port_panel",os.environ["VPN_PANEL_PORT"])
         c=db()
         write_xray_conf(c)
         c.close()
@@ -2429,6 +2441,44 @@ def main():
         c.execute("DELETE FROM settings WHERE k IN ('totp_secret','totp_last')")
         c.commit()
         c.close()
+        audit("2fa-disabled-terminal")
+        return
+    if cmd=="tfa-gen":
+        sec=base64.b32encode(secrets.token_bytes(20)).decode()
+        issuer="isile"+((" "+host()) if host() else "")
+        print(sec)
+        print("otpauth://totp/%s?secret=%s&issuer=%s&algorithm=SHA1&digits=6&period=30"%(quote(issuer+":"+get("admin_user","admin")),sec,quote(issuer)))
+        return
+    if cmd=="tfa-on":
+        sec=os.environ.get("TFA_SECRET","")
+        if not re.fullmatch(r"[A-Z2-7]{32}",sec):
+            sys.exit(2)
+        n=totp_verify(sec,os.environ.get("TFA_CODE",""))
+        if n is None:
+            sys.exit(1)
+        puts({"totp_secret":sec,"totp_last":n})
+        audit("2fa-enabled-terminal")
+        return
+    if cmd=="comps":
+        c=db()
+        try:
+            for k in REMOVABLE:
+                print(k,int(comp_installed(k)),block_state(k),comp_accounts(c,k))
+        finally:
+            c.close()
+        return
+    if cmd=="combos-on":
+        k=sys.argv[2] if len(sys.argv)>2 else ""
+        if k not in REMOVABLE:
+            sys.exit(2)
+        put("combos_off",",".join(sorted(combos_off()-set(comp_combos(k)))))
+        return
+    if cmd=="reset":
+        e=do_reset()
+        if e:
+            print(e,file=sys.stderr)
+            sys.exit(1)
+        audit("system-reset-terminal")
         return
     if cmd=="setselfsigned":
         put("selfsigned","1")
