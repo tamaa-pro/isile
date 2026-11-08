@@ -711,7 +711,12 @@ const dySw=sw(dyOn,async v=>{dyOn=v;dyApply();await saveDy({decoy_on:v})});
 const dySave=el('div',{class:'row'},btn(t('save'),'floppy-disk',async()=>{await saveDy({decoy_on:dyOn,decoy_url:dyUrl.value.trim()})},'pri'));
 const bn=el('textarea',{rows:5,maxlength:2000,dir:'auto',placeholder:t('bn_ph')});
 bn.value=s.banner||'';
-const saveBn=async(v)=>{try{await api('POST','/api/settings',{banner:v});if(v==='')bn.value='';toast(t('bn_saved'))}catch(e){terr(e)}};
+let bnOn=s.banner_on!==false;
+const bnBox=el('div',{class:'tzbox'},bn);
+const bnApply=()=>{bnBox.classList.toggle('dis',!bnOn);bn.disabled=!bnOn};
+bnApply();
+const saveBn=async b=>{try{await api('POST','/api/settings',b);toast(t('bn_saved'))}catch(e){terr(e);return false}return true};
+const bnSw=sw(bnOn,async v=>{bnOn=v;bnApply();await saveBn({banner_on:v})});
 const lgBox=el('div',{class:'kvs cols lg'},el('div',{class:'empty'},ic('spinner','fa-spin')));
 const fillLogs=async()=>{
 try{
@@ -741,7 +746,7 @@ field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
 el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_reset'),'eraser',resetMonth)))),
 panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('div',{class:'f'},el('span',{},t('pg_token')),seg([{v:'name',l:t('pg_tok_name'),i:'user'},{v:'token',l:t('pg_tok_rand'),i:'key'}],s.public_token?'token':'name',async v=>{try{await api('POST','/api/settings',{public_token:v==='token'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('small',{class:'muted'},t('pg_token_hint'))))),
-panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),bn,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn(bn.value),'pri'),btn(t('bn_clear'),'eraser',()=>saveBn(''))))),
+panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),el('div',{class:'kv'},el('span',{},t('bn_on')),bnSw),bnBox,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn({banner:bn.value,banner_on:bnOn}),'pri'),btn(t('bn_reset'),'rotate-left',async()=>{bn.value=s.banner_default||'';await saveBn({banner:bn.value,banner_on:bnOn})})))),
 panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},
 kv(t('sys_version'),VERSION),
