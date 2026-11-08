@@ -57,7 +57,7 @@ SLOWDNS_INFO="/etc/vpnpanel/slowdns.info"
 SLOWDNS_UDP=5301
 SLOWDNS_LOCAL=7001
 DNS_ZONES="/etc/vpnpanel/dnszones"
-COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshdirect","plain","sshdirect"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","tls","vaydns"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("sshslowdns","tls","slowdns"),("sshslowdns","plain","slowdns"))
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshdirect","plain","sshdirect"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("sshslowdns","plain","slowdns"))
 COMBO_REQ={"vlessdns":"xray","vmessdns":"xray","trojandns":"xray"}
 COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","sshdirect":"ssh","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns","slowdns":"slowdns"}
 REMOVABLE=("wsbridge","udpcustom","xray","vaydns","slowdns")
@@ -120,6 +120,7 @@ CREATE INDEX IF NOT EXISTS login_log_ts ON login_log(ts);""")
         c.execute("UPDATE accounts SET ptoken=? WHERE name=?",(new_token(),r["name"]))
     c.execute("UPDATE accounts SET transport='direct',tls='plain' WHERE proto='ssh' AND transport='ssl' AND tls='plain'")
     c.execute("UPDATE accounts SET tls='tls' WHERE proto='ssh' AND transport='ssl' AND tls!='tls'")
+    c.execute("UPDATE accounts SET tls='plain' WHERE proto='ssh' AND transport IN ('dns','slowdns','direct') AND tls!='plain'")
     c.execute("DROP TABLE IF EXISTS v2block")
     c.execute("UPDATE accounts SET conn_limit=0 WHERE proto!='ssh' AND conn_limit!=0")
     c.commit()
@@ -471,6 +472,8 @@ def acct_keys(proto,transport,tls):
             return ["sshudp:udp"]
         if transport=="direct":
             return ["sshdirect:plain"]
+        if transport in ("dns","slowdns"):
+            return [("sshdns" if transport=="dns" else "sshslowdns")+":plain"]
         if transport=="ssl":
             return ["sshssl:tls"]
         base="sshws" if transport=="ws" else "sshdns" if transport=="dns" else "sshslowdns" if transport=="slowdns" else "sshssl"
@@ -2157,24 +2160,14 @@ def info(name):
         items=[{"k":"udp_addr","value":"%s:%d@%s:%s"%(dom,up,n,s),"rows":2},{"k":"udp_port","value":str(up),"rows":1},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="dns":
         items=dns_head()
-        want_tls=t_on and r["tls"] in ("tls","both")
-        ad="127.0.0.1:%d@%s:%s"%(VAYDNS_LOCAL,n,s)
-        if want_tls:
-            items.append({"k":"dns_ssh_tls","value":ad,"rows":2})
-        if r["tls"] in ("plain","both"):
-            items.append({"k":"dns_ssh_plain","value":ad,"rows":2})
-        if want_tls:
+        items.append({"k":"dns_ssh","value":"127.0.0.1:%d@%s:%s"%(VAYDNS_LOCAL,n,s),"rows":2})
+        if t_on:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="slowdns":
         items=slowdns_head()
-        want_tls=t_on and r["tls"] in ("tls","both")
-        ad="127.0.0.1:%d@%s:%s"%(SLOWDNS_LOCAL,n,s)
-        if want_tls:
-            items.append({"k":"sdns_ssh_tls","value":ad,"rows":2})
-        if r["tls"] in ("plain","both"):
-            items.append({"k":"sdns_ssh_plain","value":ad,"rows":2})
-        if want_tls:
+        items.append({"k":"sdns_ssh","value":"127.0.0.1:%d@%s:%s"%(SLOWDNS_LOCAL,n,s),"rows":2})
+        if t_on:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="direct":
@@ -2286,7 +2279,7 @@ def create():
         transport=transport if transport in ("grpc","xhttp","dns") else "ws"
     elif transport in ("grpc","xhttp"):
         return err("bad_values")
-    if transport in ("udp","direct"):
+    if transport in ("udp","direct") or (proto=="ssh" and transport in ("dns","slowdns")):
         tls="plain"
     elif transport=="ssl":
         tls="tls"
@@ -2376,7 +2369,7 @@ def edit(name):
                     return err("bad_values")
                 sets["transport"]=d["transport"]
             ntr=sets.get("transport",r["transport"])
-            if r["proto"]=="ssh" and ntr in ("udp","direct"):
+            if r["proto"]=="ssh" and ntr in ("udp","direct","dns","slowdns"):
                 sets["tls"]="plain"
             elif r["proto"]=="ssh" and ntr=="ssl":
                 sets["tls"]="tls"
