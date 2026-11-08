@@ -21,6 +21,7 @@ SELFSIGNED_CERT="/etc/vpnpanel/selfsigned/cert.pem"
 BANNER_TXT="/etc/vpnpanel/banner.txt"
 BANNER_CONF="/etc/ssh/sshd_config.d/99-zvpnpanel-banner.conf"
 BANNER_MAX=2000
+DEFAULT_BANNER="<font color=\"#00FF00\">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nisile: The server has been contacted ᐠ( ᐢ ᵕ ᐢ )ᐟ\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</font>"
 DECOY_RE=re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&:@+-]*)?$")
 DECOY_MAX=300
 LOGS={"install":("file",LOGF),"audit":("file",AUDIT),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"slowdns":("unit",["slowdns"])}
@@ -121,6 +122,13 @@ CREATE INDEX IF NOT EXISTS login_log_ts ON login_log(ts);""")
     c.execute("UPDATE accounts SET transport='direct',tls='plain' WHERE proto='ssh' AND transport='ssl' AND tls='plain'")
     c.execute("UPDATE accounts SET tls='tls' WHERE proto='ssh' AND transport='ssl' AND tls!='tls'")
     c.execute("UPDATE accounts SET tls='plain' WHERE proto='ssh' AND transport IN ('dns','slowdns','direct') AND tls!='plain'")
+    if not c.execute("SELECT 1 FROM settings WHERE k='banner_on'").fetchone():
+        br=c.execute("SELECT v FROM settings WHERE k='banner'").fetchone()
+        if br is not None and br["v"]=="":
+            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('banner',?)",(DEFAULT_BANNER,))
+            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('banner_on','0')")
+        elif br is not None:
+            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('banner_on','1')")
     c.execute("DROP TABLE IF EXISTS v2block")
     c.execute("UPDATE accounts SET conn_limit=0 WHERE proto!='ssh' AND conn_limit!=0")
     c.commit()
@@ -1581,7 +1589,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",""),"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode()}
+    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1637,14 +1645,16 @@ def settings_set():
         if u and (len(u)>DECOY_MAX or not DECOY_RE.fullmatch(u)):
             return err("bad_decoy_url")
         dy["decoy_url"]=u
-    if "banner" in d:
-        txt=clean_banner(d["banner"])
+    if "banner" in d or "banner_on" in d:
+        on=bool(d["banner_on"]) if "banner_on" in d else get("banner_on","1")=="1"
+        txt=clean_banner(d["banner"]) if "banner" in d else get("banner",DEFAULT_BANNER)
         if txt is None:
             return err("bad_values")
-        e=apply_banner(txt)
+        e=apply_banner(txt if on else "")
         if e:
             return err("system",400,e)
         upd["banner"]=txt
+        upd["banner_on"]="1" if on else "0"
     if upd:
         puts(upd)
         audit("settings",",".join(sorted(upd)))
@@ -1710,6 +1720,19 @@ def apply_banner(txt):
         return ((r.stderr or r.stdout or "").strip()[-300:]) or "sshd rejected the configuration"
     sh(["systemctl","reload","ssh"])
     return ""
+def banner_boot():
+    on=get("banner_on","1")=="1"
+    txt=get("banner",DEFAULT_BANNER) if on else ""
+    try:
+        if txt:
+            with open(BANNER_TXT,encoding="utf-8") as f:
+                same=f.read()==txt+"\n" and os.path.exists(BANNER_CONF)
+        else:
+            same=not os.path.exists(BANNER_CONF)
+    except OSError:
+        same=False
+    if not same:
+        apply_banner(txt)
 def log_sources():
     out=[]
     for k,(kind,src) in LOGS.items():
@@ -1936,10 +1959,10 @@ def do_reset():
                     ssh_del(r["name"])
             c.execute("DELETE FROM accounts")
             c.execute("DELETE FROM daily")
-            c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','public_token','banner')")
+            c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','public_token','banner','banner_on')")
             c.commit()
             puts({"m_rx":0,"m_tx":0,"m_off":0})
-            apply_banner("")
+            apply_banner(DEFAULT_BANNER)
             nft_apply(c)
             xray_sync(c)
         except Exception as e:
@@ -2562,6 +2585,10 @@ def main():
         reconcile(c)
         try:
             apply_components(c)
+        except Exception:
+            traceback.print_exc()
+        try:
+            banner_boot()
         except Exception:
             traceback.print_exc()
         c.close()
