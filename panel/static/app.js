@@ -325,6 +325,43 @@ ask(t('a_confirm_del',a.name),t('a_delete'),async()=>{
 try{await api('DELETE','/api/accounts/'+a.name);toast(t('deleted'));await loadAcc();drawRows()}catch(e){terr(e);return false}
 })
 }
+const infoText=(r,n)=>{
+const E=k=>(I18N.en['l_'+k]||k),L=68,bar='='.repeat(L),ctr=s=>' '.repeat(Math.max(0,(L-s.length)>>1))+s,row=(k,v)=>'  '+k.padEnd(14)+': '+v;
+const it={};r.items.forEach(i=>{it[i.k]=i.value});
+const v2=r.proto!=='ssh',up=r.proto.toUpperCase(),sec=it.pass||it.uuid||'';
+const days=r.expires?Math.max(0,Math.ceil((r.expires-Date.now()/1000)/86400)):0;
+const o=[bar,ctr(n.toUpperCase()+'  '+(v2?up:'SSH')+' CLIENT'),bar];
+if(!v2){o.push(row('Username',n),row('Password',sec))}else{o.push(row('Name',n),row(r.proto==='trojan'?'Password':'UUID',sec))}
+o.push(row('Data Limit',r.quota?+(r.quota/GB).toFixed(2)+' GB':'Unlimited'));
+if(!v2)o.push(row('Device Limit',r.conn_limit?r.conn_limit+' Devices':'Unlimited'));
+o.push(row('Expiry Date',r.expires?fmtD(W(r.expires*1000)).replace(/\//g,'-')+' ('+days+' Days)':'Unlimited'),'');
+if(r.server_ip)o.push(row('Server IP',r.server_ip));
+if(r.host)o.push(row('Domain',r.host));
+if(it.page)o.push(row('Account Page',it.page));
+const R=[];
+const hp=v=>{const m=/^(.*):(\d+)@([^:]*):([\s\S]*)$/.exec(v||'');return m?{h:m[1],p:m[2],u:m[3],s:m[4]}:null};
+const addr=(title,k,extra)=>{const a=hp(it[k]);if(!a)return;R.push([title,['Host: '+a.h+' | Port: '+a.p,'User: '+a.u+' | Pass: '+a.s,...(extra||[]),'Format: '+it[k]]])};
+const tr=r.transport;
+if(!v2){
+if(tr==='ws'){addr('SSH WebSocket · HTTPS (TLS-443)','ssh_tls');addr('SSH WebSocket · HTTP (NoTLS-80)','ssh_plain');if(it.payload)R.push(['WebSocket Payload',['Payload:',it.payload]])}
+else if(tr==='ssl')addr('SSH SSL (Stunnel) · HTTPS (TLS-443)','ssl_tls',it.sni?['SNI : '+it.sni]:[]);
+else if(tr==='direct')addr('SSH Direct · OpenSSH','direct_addr',r.server_ip&&r.server_ip!==r.host?['Alt Host: '+r.server_ip]:[]);
+else if(tr==='udp')addr('UDP Custom','udp_addr',it.udp_port?['UDP Port : '+it.udp_port]:[]);
+else{const nm=tr==='slowdns'?'SlowDNS':'VayDNS',ck=tr==='slowdns'?'sdns_cmd':'dns_cmd';
+R.push([nm+' (DNS Tunnel)',['NS     : '+(it.dns_domain||'-'),'PubKey : '+(it.dns_pubkey||'-'),'Client :',it[ck]||'-']]);
+const ex=it.sni?['SNI : '+it.sni]:[];
+addr('SSH over '+nm+' · TLS',tr==='slowdns'?'sdns_ssh_tls':'dns_ssh_tls',ex);addr('SSH over '+nm+' · NoTLS',tr==='slowdns'?'sdns_ssh_plain':'dns_ssh_plain')}
+}else{
+const net=tr==='dns'?'VayDNS':tr==='grpc'?'gRPC':tr==='xhttp'?'XHTTP':'WebSocket';
+const ex=[];if(it.grpc_service)ex.push('Service Name : '+it.grpc_service);if(it.xhttp_path)ex.push('Path : '+it.xhttp_path);
+[['link_tls','HTTPS (TLS-443)'],['link_plain','HTTP (NoTLS-80)'],['dns_link_tls','HTTPS (TLS)'],['dns_link_plain','HTTP (NoTLS)']].forEach(([k,m])=>{if(it[k])R.push([up+' · '+net+' · '+m,['Link:',it[k],...ex]])});
+if(tr==='dns'&&(it.dns_domain||it.dns_pubkey))R.unshift(['VayDNS (DNS Tunnel)',['NS     : '+(it.dns_domain||'-'),'PubKey : '+(it.dns_pubkey||'-'),'Client :',it.dns_cmd||'-']])
+}
+o.push(bar,ctr((v2?up:'SSH')+' ROUTES ('+R.length+(R.length===1?' VARIANT)':' VARIANTS)')),bar);
+R.forEach(([ti,ls],i)=>{o.push('','['+(i+1)+'] '+ti);ls.forEach(l=>o.push('    '+l))});
+o.push('',bar);
+return o.join('\n')
+};
 async function infoDlg(n){
 try{
 const r=await api('GET','/api/accounts/'+n+'/info');
@@ -343,7 +380,7 @@ r.note?el('div',{class:'note-b'},el('span',{},ic('note-sticky'),t('f_note')),el(
 const warn=(!r.tls_on&&r.tls!=='plain')?el('div',{class:'hint'},ic('triangle-exclamation'),t('i_tls_off')):null;
 const warn2=((r.transport==='dns'||r.transport==='slowdns')&&r.dns_ok===false)?el('div',{class:'hint'},ic('triangle-exclamation'),t(r.transport==='slowdns'?'i_sdns_off':'i_dns_off')):null;
 const items=r.items.map(i=>el('div',{class:'item'},el('div',{class:'item-h'},el('span',{},t('l_'+i.k)),el('div',{class:'acts'},i.k==='page'?el('a',{class:'icon-btn',href:i.value,target:'_blank',rel:'noopener noreferrer',title:t('open'),'aria-label':t('open')},ic('arrow-up-right-from-square')):null,el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(i.value)},ic('copy')))),el('textarea',{readonly:true,rows:i.rows||2,dir:'ltr'},i.value)));
-modal(t('i_title',n),el('div',{},head,warn,warn2,...items))
+modal(t('i_title',n),el('div',{},el('div',{class:'info-copy'},btn(t('i_copy_all'),'copy',()=>copy(infoText(r,n)),'pri')),head,warn,warn2,...items))
 }catch(e){terr(e)}
 }
 async function accDlg(a){

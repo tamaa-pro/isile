@@ -423,3 +423,5 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 .p-sshslowdns{background:rgba(249,115,22,.16);color:#fb923c}
 .m-sshdirect i{background:linear-gradient(90deg,#10b981,#6ee7b7)}
 .p-sshdirect{background:rgba(16,185,129,.16);color:#34d399}
+.info-copy{display:flex;margin-bottom:12px}
+.info-copy .btn{flex:1;justify-content:center}
