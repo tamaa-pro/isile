@@ -326,40 +326,40 @@ try{await api('DELETE','/api/accounts/'+a.name);toast(t('deleted'));await loadAc
 })
 }
 const infoText=(r,n)=>{
-const E=k=>(I18N.en['l_'+k]||k),L=68,bar='='.repeat(L),ctr=s=>' '.repeat(Math.max(0,(L-s.length)>>1))+s,row=(k,v)=>'  '+k.padEnd(14)+': '+v;
+const bar='='.repeat(34),row=(k,v)=>'_ '+k+' : '+v;
 const it={};r.items.forEach(i=>{it[i.k]=i.value});
 const v2=r.proto!=='ssh',up=r.proto.toUpperCase(),sec=it.pass||it.uuid||'';
+const dd=ts=>fmtD(W(ts*1000));
 const days=r.expires?Math.max(0,Math.ceil((r.expires-Date.now()/1000)/86400)):0;
-const o=[bar,ctr(n.toUpperCase()+'  '+(v2?up:'SSH')+' CLIENT'),bar];
-if(!v2){o.push(row('Username',n),row('Password',sec))}else{o.push(row('Name',n),row(r.proto==='trojan'?'Password':'UUID',sec))}
+const o=[bar,(PM[pk(r)]||{n:up}).n,bar];
+if(!v2)o.push(row('Username',n),row('Password',sec));else o.push(row('Name',n),row(r.proto==='trojan'?'Password':'UUID',sec));
 o.push(row('Data Limit',r.quota?+(r.quota/GB).toFixed(2)+' GB':'Unlimited'));
 if(!v2)o.push(row('Device Limit',r.conn_limit?r.conn_limit+' Devices':'Unlimited'));
-o.push(row('Expiry Date',r.expires?fmtD(W(r.expires*1000)).replace(/\//g,'-')+' ('+days+' Days)':'Unlimited'),'');
+o.push(row('Creation Date',dd(r.created)),row('Expiry Date',r.expires?dd(r.expires)+' ('+days+' Days)':'Unlimited'));
 if(r.server_ip)o.push(row('Server IP',r.server_ip));
 if(r.host)o.push(row('Domain',r.host));
 if(it.page)o.push(row('Account Page',it.page));
 const R=[];
 const hp=v=>{const m=/^(.*):(\d+)@([^:]*):([\s\S]*)$/.exec(v||'');return m?{h:m[1],p:m[2],u:m[3],s:m[4]}:null};
-const addr=(title,k,extra)=>{const a=hp(it[k]);if(!a)return;R.push([title,['Host: '+a.h+' | Port: '+a.p,'User: '+a.u+' | Pass: '+a.s,...(extra||[]),'Format: '+it[k]]])};
-const tr=r.transport;
+const addr=(title,k,extra)=>{const a=hp(it[k]);if(!a)return;R.push([title,[row('Host',a.h),row('Port',a.p),row('User',a.u),row('Pass',a.s),...(extra||[]).map(x=>row(x[0],x[1])),row('Format',it[k])]])};
+const tr=r.transport,sni=it.sni?[['SNI',it.sni]]:[];
 if(!v2){
-if(tr==='ws'){addr('SSH WebSocket · HTTPS (TLS-443)','ssh_tls');addr('SSH WebSocket · HTTP (NoTLS-80)','ssh_plain');if(it.payload)R.push(['WebSocket Payload',['Payload:',it.payload]])}
-else if(tr==='ssl')addr('SSH SSL (Stunnel) · HTTPS (TLS-443)','ssl_tls',it.sni?['SNI : '+it.sni]:[]);
-else if(tr==='direct')addr('SSH Direct · OpenSSH','direct_addr',r.server_ip&&r.server_ip!==r.host?['Alt Host: '+r.server_ip]:[]);
-else if(tr==='udp')addr('UDP Custom','udp_addr',it.udp_port?['UDP Port : '+it.udp_port]:[]);
-else{const nm=tr==='slowdns'?'SlowDNS':'VayDNS',ck=tr==='slowdns'?'sdns_cmd':'dns_cmd';
-R.push([nm+' (DNS Tunnel)',['NS     : '+(it.dns_domain||'-'),'PubKey : '+(it.dns_pubkey||'-'),'Client :',it[ck]||'-']]);
-const ex=it.sni?['SNI : '+it.sni]:[];
-addr('SSH over '+nm+' · TLS',tr==='slowdns'?'sdns_ssh_tls':'dns_ssh_tls',ex);addr('SSH over '+nm+' · NoTLS',tr==='slowdns'?'sdns_ssh_plain':'dns_ssh_plain')}
+if(tr==='ws'){addr('SSH WebSocket · HTTPS (TLS-443)','ssh_tls');addr('SSH WebSocket · HTTP (NoTLS-80)','ssh_plain');if(it.payload)R.push(['WebSocket Payload',[row('Payload',it.payload)]])}
+else if(tr==='ssl')addr('SSH SSL (Stunnel) · HTTPS (TLS-443)','ssl_tls',sni);
+else if(tr==='direct')addr('SSH Direct · OpenSSH','direct_addr',r.server_ip&&r.server_ip!==r.host?[['Alt Host',r.server_ip]]:[]);
+else if(tr==='udp')addr('UDP Custom','udp_addr',it.udp_port?[['UDP Port',it.udp_port]]:[]);
+else{const nm=tr==='slowdns'?'SlowDNS':'VayDNS';
+R.push([nm+' (DNS Tunnel)',[row('NS',it.dns_domain||'-'),row('PubKey',it.dns_pubkey||'-'),row('Client',it[tr==='slowdns'?'sdns_cmd':'dns_cmd']||'-')]]);
+addr('SSH over '+nm,tr==='slowdns'?'sdns_ssh':'dns_ssh',sni)}
 }else{
 const net=tr==='dns'?'VayDNS':tr==='grpc'?'gRPC':tr==='xhttp'?'XHTTP':'WebSocket';
-const ex=[];if(it.grpc_service)ex.push('Service Name : '+it.grpc_service);if(it.xhttp_path)ex.push('Path : '+it.xhttp_path);
-[['link_tls','HTTPS (TLS-443)'],['link_plain','HTTP (NoTLS-80)'],['dns_link_tls','HTTPS (TLS)'],['dns_link_plain','HTTP (NoTLS)']].forEach(([k,m])=>{if(it[k])R.push([up+' · '+net+' · '+m,['Link:',it[k],...ex]])});
-if(tr==='dns'&&(it.dns_domain||it.dns_pubkey))R.unshift(['VayDNS (DNS Tunnel)',['NS     : '+(it.dns_domain||'-'),'PubKey : '+(it.dns_pubkey||'-'),'Client :',it.dns_cmd||'-']])
+const ex=[];if(it.grpc_service)ex.push(row('Service Name',it.grpc_service));if(it.xhttp_path)ex.push(row('Path',it.xhttp_path));
+if(tr==='dns'&&(it.dns_domain||it.dns_pubkey))R.push(['VayDNS (DNS Tunnel)',[row('NS',it.dns_domain||'-'),row('PubKey',it.dns_pubkey||'-'),row('Client',it.dns_cmd||'-')]]);
+[['link_tls','HTTPS (TLS-443)'],['link_plain','HTTP (NoTLS-80)'],['dns_link_tls','HTTPS (TLS)'],['dns_link_plain','HTTP (NoTLS)']].forEach(([k,m])=>{if(it[k])R.push([up+' · '+net+' · '+m,[row('Link',it[k]),...ex]])})
 }
-o.push(bar,ctr((v2?up:'SSH')+' ROUTES ('+R.length+(R.length===1?' VARIANT)':' VARIANTS)')),bar);
-R.forEach(([ti,ls],i)=>{o.push('','['+(i+1)+'] '+ti);ls.forEach(l=>o.push('    '+l))});
-o.push('',bar);
+o.push(bar,(v2?up:'SSH')+' ROUTES ('+R.length+(R.length===1?' VARIANT)':' VARIANTS)'),bar);
+R.forEach(([ti,ls],i)=>{if(i)o.push('');o.push('['+(i+1)+'] '+ti,...ls)});
+o.push(bar);
 return o.join('\n')
 };
 async function infoDlg(n){
@@ -412,8 +412,8 @@ const baseOf=(kind,proto,tr)=>kind==='v2'?(tr==='dns'?proto+'dns':proto):(tr==='
 const curBase=()=>baseOf(st.kind,st.proto,st.kind==='v2'?st.net:st.transport);
 const orgBase=ed?baseOf(a.proto==='ssh'?'ssh':'v2',a.proto,a.transport):'';
 const isUdp=()=>st.kind==='ssh'&&st.transport==='udp';
-const fxTls=()=>st.kind!=='ssh'?'':st.transport==='udp'||st.transport==='direct'?'plain':st.transport==='ssl'?'tls':'';
-const kindOk=k=>ed||(k==='ssh'?['sshws:tls','sshws:plain','sshssl:tls','sshdirect:plain','sshdns:tls','sshdns:plain','sshslowdns:tls','sshslowdns:plain','sshudp:udp']:V2P.flatMap(p=>[p+':tls',p+':plain'])).some(av);
+const fxTls=()=>st.kind!=='ssh'?'':st.transport==='udp'||st.transport==='direct'||st.transport==='dns'||st.transport==='slowdns'?'plain':st.transport==='ssl'?'tls':'';
+const kindOk=k=>ed||(k==='ssh'?['sshws:tls','sshws:plain','sshssl:tls','sshdirect:plain','sshdns:plain','sshslowdns:plain','sshudp:udp']:V2P.flatMap(p=>[p+':tls',p+':plain'])).some(av);
 const protoOk=p=>(ed&&a.proto===p)||av(p+':tls')||av(p+':plain');
 const trOk=x=>{if(ed&&a.proto==='ssh'&&a.transport===x)return true;if(x==='udp')return av('sshudp:udp');if(x==='direct')return av('sshdirect:plain');if(x==='ssl')return av('sshssl:tls');const b=x==='ssl'?'sshssl':x==='dns'?'sshdns':x==='slowdns'?'sshslowdns':'sshws';return av(b+':tls')||av(b+':plain')};
 const netOk=x=>{if(x!=='dns')return true;if(ed&&a.proto!=='ssh'&&a.transport==='dns')return true;return av(st.proto+'dns:tls')||av(st.proto+'dns:plain')};
@@ -455,7 +455,7 @@ const v2=st.kind==='v2',udp=!!fxTls();
 kindSeg.upd(kindOpts(),st.kind);protoSeg.upd(protoOpts(),st.proto);transportSeg.upd(trOpts(),st.transport);tlsSeg.upd(tlsOpts(),st.tls);
 cProto.set(!v2||ed);cTransport.set(v2);cNet.set(!v2);netSeg.upd(netOpts(),st.net);cTls.set(forced||udp);cTlsHint.set(!forced||udp);
 cUnav.set(!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(v2&&netOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!(forced||udp)&&tlsOpts().some(o=>o.dis)))));
-tlsHintTxt.textContent=t((v2?st.net==='dns':(st.transport==='dns'||st.transport==='slowdns'))?'f_tls_hint_dns':'f_tls_hint');
+tlsHintTxt.textContent=t(v2&&st.net==='dns'?'f_tls_hint_dns':'f_tls_hint');
 cConn.set(v2);connHint.textContent=t('f_conn_limit_ssh');
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
@@ -498,14 +498,14 @@ function compsBox(){
 const ML={tls:t('cb_tls'),plain:t('cb_plain'),udp:t('cb_udp')};
 const V2R=['vless','vmess','trojan'].flatMap(p=>['tls','plain'].map(m=>[p,m]));
 const DNSN={sshdns:'SSH',vlessdns:'VLESS',vmessdns:'VMess',trojandns:'Trojan'};
-const DNSR=['sshdns','vlessdns','vmessdns','trojandns'].flatMap(p=>['tls','plain'].map(m=>[p,m]));
+const DNSR=[['sshdns','plain'],...['vlessdns','vmessdns','trojandns'].flatMap(p=>['tls','plain'].map(m=>[p,m]))];
 const BL=[
 {c:'wsbridge',i:'terminal',n:'SSH WebSocket',d:'cb_ws_desc',rows:[['sshws','tls'],['sshws','plain']]},
 {c:'sshssl',i:'lock',n:'SSH SSL',d:'cb_ssl_desc',rows:[['sshssl','tls']]},
 {c:'sshdirect',i:'plug',n:'Direct (OpenSSH)',d:'cb_direct_desc',rows:[['sshdirect','plain']]},
 {c:'udpcustom',i:'tower-broadcast',n:'UDP Custom',d:'cb_udp_desc',rows:[['sshudp','udp']]},
 {c:'vaydns',i:'satellite-dish',n:'VayDNS',d:'cb_dns_desc',rows:DNSR},
-{c:'slowdns',i:'satellite',n:'SlowDNS',d:'cb_sdns_desc',rows:[['sshslowdns','tls'],['sshslowdns','plain']]},
+{c:'slowdns',i:'satellite',n:'SlowDNS',d:'cb_sdns_desc',rows:[['sshslowdns','plain']]},
 {c:'xray',i:'bolt',n:'Xray',d:'cb_xray_desc',rows:V2R}];
 const box=el('div',{class:'kvs cols xl'},el('div',{class:'empty'},ic('spinner','fa-spin')));
 let R=null;
@@ -533,7 +533,7 @@ if(!v&&enabledN===1&&cm.removable&&cm.installed&&cm.accounts>0){const d=ask(t('c
 else send()
 });
 if(!cm.installed||busy)s.disabled=true;
-return el('div',{class:'cbrow'},el('div',{class:'srow-t'},el('b',{},(b.c==='xray'?PM[p].n+' · ':b.c==='vaydns'?DNSN[p]+' · ':'')+(b.c==='sshdirect'?t('cb_direct'):ML[m])),x.why==='no_tls'?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('cb_no_tls')):null),s)
+return el('div',{class:'cbrow'},el('div',{class:'srow-t'},el('b',{},(b.c==='xray'?PM[p].n+' · ':b.c==='vaydns'?DNSN[p]+' · ':'')+(b.c==='sshdirect'?t('cb_direct'):(p==='sshdns'||p==='sshslowdns')?t('cb_dnsudp'):ML[m])),x.why==='no_tls'?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('cb_no_tls')):null),s)
 });
 const info=[];
 if(b.c==='udpcustom'){
