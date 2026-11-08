@@ -2227,7 +2227,7 @@ def info(name):
     cn=CONN.get(n,{})
     act=is_live(n,r["proto"],r["status"],cn.get("n",0))
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
+    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,host=dom,server_ip=get("server_ip",""),note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
 def parse_common(d,creating):
     try:
         out={}
