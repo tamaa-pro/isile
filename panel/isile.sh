@@ -92,13 +92,16 @@ for k in sys.argv[2:]:
     r=c.execute("SELECT v FROM settings WHERE k=?",(k,)).fetchone()
     v=r[0] if r else ""
     if k=="totp_secret": v="1" if v else ""
-    print(v)' "$DATA/panel.db" domain server_ip admin_user selfsigned port_panel totp_secret vaydns_domain slowdns_domain)
-DOMAIN="${_S[0]}"; IP="${_S[1]}"; ADMIN="${_S[2]}"; SELF="${_S[3]}"; PORT="${_S[4]}"; TFA="${_S[5]}"; VDOM="${_S[6]}"; SDOM="${_S[7]}"
+    print(v)' "$DATA/panel.db" domain server_ip admin_user selfsigned port_panel totp_secret vaydns_domain slowdns_domain panel_domain)
+DOMAIN="${_S[0]}"; IP="${_S[1]}"; ADMIN="${_S[2]}"; SELF="${_S[3]}"; PORT="${_S[4]}"; TFA="${_S[5]}"; VDOM="${_S[6]}"; SDOM="${_S[7]}"; PDOM="${_S[8]}"
+PDACT=0
+if [ -n "$DOMAIN" ] && [ -n "$PDOM" ] && [ "$PDOM" != "$DOMAIN" ] && [ -s "/etc/letsencrypt/live/$PDOM/fullchain.pem" ]; then PDACT=1; fi
 if ! [[ "$PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then PORT=2080; fi
 if [ -n "$DOMAIN" ]; then SCHEME=https; HOSTN="$DOMAIN"
 elif [ "$SELF" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ]; then SCHEME=https; HOSTN="${IP:-server-address}"
 else SCHEME=http; HOSTN="${IP:-server-address}"; fi
 URL="$SCHEME://$HOSTN:$PORT"
+if [ "$PDACT" = 1 ]; then URL="https://$PDOM"; fi
 }
 latest_ver(){
 local r="tamaa-pro/isile" b="main"
@@ -146,8 +149,9 @@ kv "Username" "$ADMIN"
 kv "Password" "${c_d}stored hashed, use option 1 to set a new one${c_rs}"
 if [ -n "$TFA" ]; then kv "2-step" "${c_bg}enabled${c_rs}"; else kv "2-step" "${c_d}disabled${c_rs}"; fi
 kv "Domain" "${d:-${c_d}not set (server address, no TLS)${c_rs}}"
+if [ "$PDACT" = 1 ]; then kv "Panel host" "$PDOM ${c_d}(HTTPS on 443, no panel port)${c_rs}"; elif [ -n "$PDOM" ]; then kv "Panel host" "$PDOM ${c_by}(inactive: certificate missing, panel on port $PORT)${c_rs}"; fi
 kv "Server IP" "${ip:-unknown}"
-if [ -n "$d" ]; then kv "Ports" "80 (no TLS) | 443 (TLS) | $PORT (panel, HTTPS)"; else kv "Ports" "80 (no TLS) | $PORT (panel, $([ "$SCHEME" = https ] && echo HTTPS || echo HTTP))"; fi
+if [ "$PDACT" = 1 ]; then kv "Ports" "80 (no TLS) | 443 (TLS, the panel too)"; elif [ -n "$d" ]; then kv "Ports" "80 (no TLS) | 443 (TLS) | $PORT (panel, HTTPS)"; else kv "Ports" "80 (no TLS) | $PORT (panel, $([ "$SCHEME" = https ] && echo HTTPS || echo HTTP))"; fi
 if [ -n "$d" ]; then kv "SSH SSL" "direct SSH on 80 (no TLS) and 443 (TLS via stunnel)"; else kv "SSH SSL" "direct SSH on 80 (no TLS)"; fi
 kv "Paths" "/vless /vmess /trojan (WS), *-grpc, *-xhttp"
 kv "" "any other path = SSH WebSocket"
@@ -246,6 +250,7 @@ d="$(printf '%s' "$d" | tr 'A-Z' 'a-z' | tr -d ' ')"
 [ -n "$d" ] || { cancelled; return 9; }
 [[ "$d" =~ $DOMAIN_RE ]] || { bad "Invalid domain name"; return; }
 if [ "$d" = "$VDOM" ] || [ "$d" = "$SDOM" ]; then bad "That name is a DNS tunnel domain, choose a different one"; return; fi
+if [ -n "$PDOM" ] && [ "$d" = "$PDOM" ]; then bad "That name is the panel subdomain, choose a different one"; return; fi
 dip="$(getent ahostsv4 "$d" 2>/dev/null | awk 'NR==1{print $1}')"
 kv "Resolves to" "${dip:-nothing}"
 if [ -n "$dip" ] && "$PY" "$APP/panel/app.py" cfip $dip; then
@@ -253,7 +258,7 @@ warn "Cloudflare proxy detected (orange cloud): that is why it differs from this
 info "Direct SSH and the other ports do not go through it: use a DNS only"
 info "(grey cloud) name for those. If the certificate fails, switch to grey"
 info "cloud for a moment and turn off Always Use HTTPS."
-case "$PORT" in 443|2053|2083|2087|2096|8443) ;; *) warn "Panel port $PORT is not supported by the proxy: use option 4 (2053, 2083, 2087, 2096 or 8443).";; esac
+if [ "$PDACT" != 1 ]; then case "$PORT" in 443|2053|2083|2087|2096|8443) ;; *) warn "Panel port $PORT is not supported by the proxy: use option 5 (2053, 2083, 2087, 2096 or 8443) or option 4 (panel subdomain).";; esac; fi
 yn "Continue?" || { cancelled; return 9; }
 elif [ -n "$IP" ] && [ "$dip" = "$IP" ]; then ok "The domain points to this server."
 else
@@ -272,6 +277,72 @@ kv "Panel URL" "${c_bc}$URL${c_rs}"
 warn "Open TCP 443 in the cloud firewall if it is not open yet."
 else
 bad "Changing the domain failed. Nothing else was touched. Last log lines:"
+tail_log 10
+fi
+}
+change_panel_domain(){
+local d mail dip
+load
+if [ -z "$DOMAIN" ]; then bad "Set the main domain first (option 3): the panel subdomain is served over HTTPS on port 443."; return; fi
+kv "Main domain" "$DOMAIN"
+if [ "$PDACT" = 1 ]; then kv "Subdomain" "${c_bg}$PDOM${c_rs}  ${c_d}(panel on 443, no panel port)${c_rs}"
+elif [ -n "$PDOM" ]; then kv "Subdomain" "$PDOM ${c_by}(inactive: certificate missing)${c_rs}"
+else kv "Subdomain" "${c_d}not set (panel on port $PORT)${c_rs}"; fi
+kv "Panel URL" "${c_bc}$URL${c_rs}"
+echo
+info "Serves the panel from its own subdomain (for example panel.$DOMAIN) over"
+info "HTTPS on port 443, with its own certificate. The panel port stops answering."
+info "The main domain used by the protocols is not touched. Create the DNS record"
+info "of the subdomain first (a Cloudflare proxied record works)."
+[ -z "$PDOM" ] || info "Type  off  to remove the subdomain and go back to port $PORT."
+echo
+ask "Panel subdomain (Enter to cancel):" d
+d="$(printf '%s' "$d" | tr 'A-Z' 'a-z' | tr -d ' ')"
+[ -n "$d" ] || { cancelled; return 9; }
+if [ "$d" = off ]; then
+[ -n "$PDOM" ] || { info "No panel subdomain is set."; return; }
+warn "Open TCP $PORT in the cloud firewall first, or you will not reach the panel."
+yn "Remove $PDOM and put the panel back on port $PORT?" || { cancelled; return 9; }
+echo
+if work "Moving the panel back to its port..." bash "$APP/panel/setdomain.sh" --panel-off; then
+load
+ok "The panel is back on port $PORT"
+kv "Panel URL" "${c_bc}$URL${c_rs}"
+else
+bad "The change failed. Last log lines:"
+tail_log 10
+fi
+return
+fi
+[[ "$d" =~ $DOMAIN_RE ]] || { bad "Invalid domain name"; return; }
+if [ "$d" = "$DOMAIN" ]; then bad "That is the main domain: choose a different name such as panel.$DOMAIN"; return; fi
+if [ -n "$VDOM" ] && { [ "$d" = "$VDOM" ] || [[ "$d" == *".$VDOM" ]]; }; then bad "That name belongs to the VayDNS tunnel domain, choose a different one"; return; fi
+if [ -n "$SDOM" ] && { [ "$d" = "$SDOM" ] || [[ "$d" == *".$SDOM" ]]; }; then bad "That name belongs to the SlowDNS tunnel domain, choose a different one"; return; fi
+if [ "$PDACT" = 1 ] && [ "$d" = "$PDOM" ]; then info "$d is already the panel subdomain."; return; fi
+dip="$(getent ahostsv4 "$d" 2>/dev/null | awk 'NR==1{print $1}')"
+kv "Resolves to" "${dip:-nothing}"
+if [ -n "$dip" ] && "$PY" "$APP/panel/app.py" cfip $dip; then
+warn "Cloudflare proxy detected (orange cloud). Set Cloudflare SSL/TLS to Full (strict)."
+info "If the certificate fails, switch to grey cloud for a moment and turn off"
+info "Always Use HTTPS."
+elif [ -n "$IP" ] && [ "$dip" = "$IP" ]; then ok "The subdomain points to this server."
+else
+warn "The subdomain does not point to this server ($IP). The certificate will fail until its A record is fixed."
+yn "Continue anyway?" || { cancelled; return 9; }
+fi
+ask "Email for certificate notices (optional):" mail
+[ -z "$mail" ] || [[ "$mail" =~ $EMAIL_RE ]] || { bad "Invalid email address"; return; }
+echo
+warn "The panel moves to https://$d and port $PORT is closed. Make sure TCP 443 is open."
+yn "Apply $d now? It takes up to a minute." || { cancelled; return 9; }
+echo
+if work "Issuing the certificate and moving the panel..." bash "$APP/panel/setdomain.sh" --panel "$d" "$mail"; then
+load
+ok "The panel now runs on the subdomain $d"
+kv "Panel URL" "${c_bc}$URL${c_rs}"
+warn "Open TCP 443 in the cloud firewall if it is not open yet. Port $PORT is no longer used."
+else
+bad "The change failed. The previous setup was kept. Last log lines:"
 tail_log 10
 fi
 }
@@ -306,6 +377,7 @@ return 0
 port_cli(){
 local p="${1:-}" why
 load
+if [ "$PDACT" = 1 ]; then echo "the panel is served from $PDOM on port 443, so no panel port is used (remove the subdomain first)"; return 1; fi
 [[ "$p" =~ ^[0-9]+$ ]] || { echo "invalid port"; return 1; }
 p=$((10#$p))
 why="$(port_bad "$p")"
@@ -316,6 +388,14 @@ echo "panel port changed to $p"
 change_port(){
 local p why old
 load
+if [ "$PDACT" = 1 ]; then
+kv "Panel URL" "${c_bc}$URL${c_rs}"
+echo
+warn "The panel is served from the subdomain $PDOM on port 443."
+info "No panel port is used. To go back to a port, remove the subdomain with"
+info "option 4 first."
+return
+fi
 old="$PORT"
 kv "Panel port" "${c_bc}$PORT${c_rs}"
 kv "Panel URL" "$URL"
@@ -504,13 +584,14 @@ update
 UPDATED=1
 }
 uninstall(){
-local ans d n pp
+local ans d n pp pd
 if [ "${1:-}" = "--yes" ]; then ans=YES; else
 echo "This removes the panel, Xray, the SSH bridge and SSL multiplexer, stunnel, UDP Custom, VayDNS and SlowDNS (if installed), all VPN accounts and the TLS certificate."
 read -rp "Type YES to continue: " ans
 fi
 [ "$ans" = "YES" ] || { echo "Cancelled"; return 1; }
 d="$(dbget domain)"
+pd="$(dbget panel_domain)"
 pp="$(dbget port_panel)"
 local names
 names="$(dbq "SELECT name FROM accounts WHERE proto='ssh'")"
@@ -555,6 +636,7 @@ rm -f /etc/nginx/conf.d/vpnpanel.conf
 [ -e /etc/nginx/sites-available/default ] && ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
 [ -z "$d" ] || certbot delete --cert-name "$d" --non-interactive >/dev/null 2>&1
+[ -z "$pd" ] || certbot delete --cert-name "$pd" --non-interactive >/dev/null 2>&1
 rm -f /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
 for p in "${pp:-2080}" 2080 80 443; do ufw delete allow "$p/tcp" >/dev/null 2>&1; done
 rm -rf "$APP" "$DATA" /etc/vpnpanel /usr/local/etc/xray /usr/local/share/xray /usr/local/bin/xray /var/log/xray /etc/logrotate.d/vpnpanel-xray /var/log/isile-install.log
@@ -590,20 +672,23 @@ printf '\n  %sPanel%s  %s%s%s   %s\n\n' "$c_d" "$c_rs" "$c_bc" "$URL" "$c_rs" "$
 dom="${DOMAIN:-not set}"; [ "${#dom}" -le 22 ] || dom="${dom:0:21}~"
 item 1 "" "Edit admin account" "${c_d}$ADMIN${c_rs}"
 if [ -n "$TFA" ]; then item 2 "" "Disable two-step verification" "${c_bg}${g_dot} ON${c_rs}"; else item 2 "" "Enable two-step verification" "${c_d}${g_ring} OFF${c_rs}"; fi
+pdm="${PDOM:-not set}"; [ "${#pdm}" -le 22 ] || pdm="${pdm:0:21}~"
+if [ "$PDACT" = 1 ]; then pdv="${c_bg}$pdm${c_rs}"; else pdv="${c_d}$pdm${c_rs}"; fi
 item 3 "" "Change domain" "${c_d}$dom${c_rs}"
-item 4 "" "Change port" "${c_d}$PORT${c_rs}"
-item 5 "" "Show panel info" ""
-item 6 "" "Manage panel services" ""
-item 7 "$c_r" "Reset panel" ""
-item 8 "$c_br" "Delete panel" ""
-item 9 "$c_y" "Restart panel" ""
+item 4 "" "Panel subdomain" "$pdv"
+if [ "$PDACT" = 1 ]; then item 5 "" "Change port" "${c_d}not used${c_rs}"; else item 5 "" "Change port" "${c_d}$PORT${c_rs}"; fi
+item 6 "" "Show panel info" ""
+item 7 "" "Manage panel services" ""
+item 8 "$c_r" "Reset panel" ""
+item 9 "$c_br" "Delete panel" ""
+item 10 "$c_y" "Restart panel" ""
 case "$UPD" in
 newer) up="${c_bg}$g_up $LATEST available${c_rs}";;
 same) up="${c_d}up to date${c_rs}";;
 older) up="${c_d}up to date${c_rs}";;
 *) up="${c_d}cannot check${c_rs}";;
 esac
-item 10 "$c_g" "Update panel" "$up"
+item 11 "$c_g" "Update panel" "$up"
 echo
 [ -z "$NOTE" ] || { printf '  %s%s%s\n' "$c_br" "$NOTE" "$c_rs"; NOTE=""; }
 printf '  %sEnter%s  Close menu\n\n' "$c_by" "$c_rs"
@@ -637,13 +722,14 @@ case "$c" in
 1) run_screen "Edit admin account" edit_admin;;
 2) if [ -n "$TFA" ]; then run_screen "Disable two-step verification" two_step; else run_screen "Enable two-step verification" two_step; fi;;
 3) run_screen "Change domain" change_domain;;
-4) run_screen "Change port" change_port;;
-5) screen "Panel info"; show_info; pause;;
-6) manage_services;;
-7) run_screen "Reset panel" reset_panel;;
-8) run_screen "Delete panel" delete_panel; [ "$UPDATED" = 1 ] && break;;
-9) run_screen "Restart panel" restart_panel;;
-10) if job_busy; then busy_msg; else screen "Update panel"; update_panel; rc=$?; if [ "$UPDATED" = 1 ]; then break; fi; [ "$rc" = 9 ] || pause; check_update; fi;;
+4) run_screen "Panel subdomain" change_panel_domain;;
+5) run_screen "Change port" change_port;;
+6) screen "Panel info"; show_info; pause;;
+7) manage_services;;
+8) run_screen "Reset panel" reset_panel;;
+9) run_screen "Delete panel" delete_panel; [ "$UPDATED" = 1 ] && break;;
+10) run_screen "Restart panel" restart_panel;;
+11) if job_busy; then busy_msg; else screen "Update panel"; update_panel; rc=$?; if [ "$UPDATED" = 1 ]; then break; fi; [ "$rc" = 9 ] || pause; check_update; fi;;
 *) NOTE="Invalid choice: $c";;
 esac
 done

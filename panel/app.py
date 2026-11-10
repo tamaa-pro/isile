@@ -181,6 +181,19 @@ def tls_on():
     return bool(get("domain",""))
 def panel_https():
     return tls_on() or (get("selfsigned","0")=="1" and os.path.isfile(SELFSIGNED_CERT))
+def panel_domain():
+    """Optional subdomain that serves the panel on port 443 instead of the panel port ('' when not set)."""
+    return get("panel_domain","")
+def panel_domain_on():
+    """True while the panel is really served from its subdomain (main domain set and the subdomain certificate present)."""
+    pd=panel_domain()
+    return bool(pd and tls_on() and pd!=get("domain","") and os.path.exists("/etc/letsencrypt/live/%s/fullchain.pem"%pd))
+def under_tunnel(d):
+    """True when d is a DNS tunnel domain or lives below one (its DNS answers belong to the tunnel server)."""
+    for t in (vaydns_domain(),slowdns_domain()):
+        if t and (d==t or d.endswith("."+t)):
+            return True
+    return False
 def panel_port():
     """Panel port chosen at install or from the terminal menu (nginx listens on it). Default 2080."""
     v=get("port_panel","")
@@ -702,6 +715,8 @@ def speed_of(n):
         return 0,0
     return int(sp[0]),int(sp[1])
 def page_url(key):
+    if panel_domain_on():
+        return "https://%s/%s"%(panel_domain(),key)
     return "%s://%s:%d/%s"%("https" if panel_https() else "http",host(),panel_port(),key)
 def public_on():
     return get("public_page","0")=="1"
@@ -1517,7 +1532,9 @@ def listening_udp():
 def ports_info():
     ls=listening_ports()
     t=tls_on()
-    rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls),("panel",panel_port(),True,ls)]
+    rows=[("ssh",ssh_port(),True,ls),("http",80,True,ls),("https",443,t,ls)]
+    if not panel_domain_on():
+        rows.append(("panel",panel_port(),True,ls))
     if comp_installed("udpcustom"):
         rows.append(("udp",udp_port(),comp_on("udpcustom"),listening_udp()))
     if comp_installed("vaydns") or comp_installed("slowdns"):
@@ -1589,7 +1606,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode()}
+    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode()}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1843,7 +1860,13 @@ def domain_get():
     ip=get("server_ip","")
     dns=dns_of(cand) if cand else []
     pp=panel_port()
-    return jsonify(domain=cur,candidate=cand,server_ip=ip,dns=dns,match=bool(ip and ip in dns),cert=cert_info(cand),cf=is_cf(dns),panel_port=pp,cf_port_ok=pp in CF_HTTPS_PORTS)
+    pcur=panel_domain()
+    pcand=str(request.args.get("p","")).strip().lower() or pcur
+    if pcand and not DOMAIN_RE.fullmatch(pcand):
+        return err("bad_domain")
+    pdns=dns_of(pcand) if pcand else []
+    pd=dict(domain=pcur,on=panel_domain_on(),candidate=pcand,dns=pdns,match=bool(ip and ip in pdns),cf=is_cf(pdns),cert=cert_info(pcand))
+    return jsonify(domain=cur,candidate=cand,server_ip=ip,dns=dns,match=bool(ip and ip in dns),cert=cert_info(cand),cf=is_cf(dns),panel_port=pp,cf_port_ok=pp in CF_HTTPS_PORTS,pd=pd)
 def start_job(kind,cmd):
     if os.path.exists(RCF):
         os.unlink(RCF)
@@ -1865,10 +1888,42 @@ def domain_set():
         return err("bad_domain")
     if email and not EMAIL_RE.fullmatch(email):
         return err("bad_email")
-    if dom in (vaydns_domain(),slowdns_domain()):
+    if dom in (vaydns_domain(),slowdns_domain(),panel_domain()):
         return err("domain_same")
+    if job_busy():
+        return err("busy",409)
     audit("domain-set",dom)
     e=start_job("domain","bash %s/setdomain.sh %s %s"%(BASE,shq(dom),shq(email)))
+    if e:
+        return err("system",500,e)
+    return jsonify(ok=True)
+@app.post("/api/panel-domain")
+@auth
+def panel_domain_set():
+    """Set (or clear with an empty value) the panel subdomain. Issues its own certificate and moves the panel from the port to 443."""
+    d=request.get_json(silent=True) or {}
+    dom=str(d.get("domain","")).strip().lower()
+    email=str(d.get("email","")).strip()
+    if job_busy():
+        return err("busy",409)
+    if not dom:
+        if not panel_domain():
+            return jsonify(ok=True)
+        audit("panel-domain-off",panel_domain())
+        e=start_job("paneldomain","bash %s/setdomain.sh --panel-off"%shq(BASE))
+        if e:
+            return err("system",500,e)
+        return jsonify(ok=True)
+    if not DOMAIN_RE.fullmatch(dom):
+        return err("bad_domain")
+    if email and not EMAIL_RE.fullmatch(email):
+        return err("bad_email")
+    if not tls_on():
+        return err("pd_need_domain")
+    if dom==get("domain","") or under_tunnel(dom):
+        return err("pd_same")
+    audit("panel-domain-set",dom)
+    e=start_job("paneldomain","bash %s/setdomain.sh --panel %s %s"%(shq(BASE),shq(dom),shq(email)))
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
@@ -1898,6 +1953,8 @@ def panel_port_set():
         p=int(str(d.get("port","")).strip())
     except ValueError:
         return err("bad_port")
+    if panel_domain_on():
+        return err("pd_active")
     e=port_problem(p)
     if e:
         return err(e)
@@ -2082,7 +2139,7 @@ def vaydns_config():
     dom=str(d.get("domain","")).strip().lower()
     if dom and not DOMAIN_RE.fullmatch(dom):
         return err("bad_domain")
-    if dom and dom in (get("domain",""),slowdns_domain()):
+    if dom and (dom in (get("domain",""),slowdns_domain(),panel_domain()) or (panel_domain() and panel_domain().endswith("."+dom))):
         return err("domain_same")
     if not comp_installed("vaydns"):
         return err("not_found",404)
@@ -2101,7 +2158,7 @@ def slowdns_config():
     dom=str(d.get("domain","")).strip().lower()
     if dom and not DOMAIN_RE.fullmatch(dom):
         return err("bad_domain")
-    if dom and dom in (get("domain",""),vaydns_domain()):
+    if dom and (dom in (get("domain",""),vaydns_domain(),panel_domain()) or (panel_domain() and panel_domain().endswith("."+dom))):
         return err("domain_same")
     if not comp_installed("slowdns"):
         return err("not_found",404)
@@ -2498,6 +2555,9 @@ def main():
         put("admin_user",os.environ["VPN_ADMIN_USER"])
         put("admin_hash",generate_password_hash(os.environ["VPN_ADMIN_PASS"]))
         puts({"domain":os.environ.get("VPN_DOMAIN",""),"server_ip":os.environ.get("VPN_SERVER_IP","")})
+        pdv=os.environ.get("VPN_PANEL_DOMAIN","").strip().lower()
+        if pdv and DOMAIN_RE.fullmatch(pdv) and os.environ.get("VPN_DOMAIN","") and pdv!=os.environ.get("VPN_DOMAIN",""):
+            put("panel_domain",pdv)
         if re.fullmatch(r"[0-9]{4,5}",os.environ.get("VPN_PANEL_PORT","")) and 1024<=int(os.environ["VPN_PANEL_PORT"])<=65535:
             put("port_panel",os.environ["VPN_PANEL_PORT"])
         c=db()
@@ -2567,6 +2627,12 @@ def main():
         return
     if cmd=="setdomain":
         put("domain",os.environ["VPN_DOMAIN"])
+        return
+    if cmd=="setpaneldomain":
+        v=os.environ.get("VPN_PANEL_DOMAIN","").strip().lower()
+        if v and not DOMAIN_RE.fullmatch(v):
+            sys.exit(2)
+        put("panel_domain",v)
         return
     if cmd=="svcs":
         print(" ".join(expected_units()))
