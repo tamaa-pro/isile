@@ -638,25 +638,43 @@ if(n.value!==c.value){toast(t('s_mismatch'));return}
 try{await api('POST','/api/password',{old:o.value,new:n.value,code:cdPw.value});toast(t('s_changed'));o.value=n.value=c.value='';setTimeout(()=>{location.href='/login'},1200)}catch(e){terr(e)}
 };
 const dom=el('input',{placeholder:'vpn.example.com',dir:'ltr',value:s.domain,autocomplete:'off'});
+const pdIn=el('input',{placeholder:'panel.example.com',dir:'ltr',value:s.panel_domain||'',autocomplete:'off'});
+let pdOn=!!s.panel_domain_on,pdCur=s.panel_domain||'';
 const mail=el('input',{placeholder:'you@example.com',dir:'ltr',autocomplete:'off'});
 const res=el('div',{class:'kvs cols full box'});
 let ppNow=2080,ppDirty=false;
-const showDom=r=>{ppNow=r.panel_port||2080;if(!ppDirty)ppIn.value=ppNow;res.replaceChildren(...[
+const showDom=r=>{ppNow=r.panel_port||2080;if(!ppDirty)ppIn.value=ppNow;const q=r.pd||{};pdOn=!!q.on;pdCur=q.domain||'';ppIn.disabled=pdOn;ppSave.disabled=pdOn;pdOff.style.display=pdCur?'':'none';res.replaceChildren(...[
 kv(t('dm_current'),r.domain||t('dm_none')),
 kv(t('dm_server_ip'),r.server_ip||'—'),
 kv(t('dm_dns'),r.dns.length?r.dns.join(', '):'—',r.candidate?(r.cf?pill('warn',t('dm_cf')):pill(r.match?'ok':'bad',r.match?t('dm_match'):t('dm_nomatch'))):null),
 kv(t('dm_cert'),r.cert?t('dm_cert_days',r.cert.days_left)+' ('+dtd(r.cert.expires)+')':t('dm_cert_none')),
 r.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_cf_note')):null,
-r.cf&&!r.cf_port_ok?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_cf_port',r.panel_port)):null,
-r.candidate&&!r.match&&!r.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',r.candidate,r.server_ip||'—')):null].filter(Boolean))};
-const verify=async(quiet)=>{try{const r=await api('GET','/api/domain'+(dom.value.trim()?'?d='+encodeURIComponent(dom.value.trim().toLowerCase()):''));showDom(r);if(!quiet)toast(t('dm_checked'))}catch(e){terr(e)}};
+r.cf&&!r.cf_port_ok&&!pdOn?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_cf_port',r.panel_port)):null,
+r.candidate&&!r.match&&!r.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',r.candidate,r.server_ip||'—')):null,
+kv(t('pd_current'),pdCur?pdCur+(pdOn?'':' ('+t('pd_inactive')+')'):t('pd_none',r.panel_port)),
+q.candidate?kv(t('pd_dns'),q.dns&&q.dns.length?q.dns.join(', '):'—',q.cf?pill('warn',t('dm_cf')):pill(q.match?'ok':'bad',q.match?t('dm_match'):t('dm_nomatch'))):null,
+q.candidate?kv(t('pd_cert'),q.cert?t('dm_cert_days',q.cert.days_left)+' ('+dtd(q.cert.expires)+')':t('dm_cert_none')):null,
+q.candidate&&q.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('pd_cf_note')):null,
+q.candidate&&!q.match&&!q.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',q.candidate,r.server_ip||'—')):null].filter(Boolean))};
+const verify=async(quiet)=>{try{const qs=[];if(dom.value.trim())qs.push('d='+encodeURIComponent(dom.value.trim().toLowerCase()));if(pdIn.value.trim())qs.push('p='+encodeURIComponent(pdIn.value.trim().toLowerCase()));const r=await api('GET','/api/domain'+(qs.length?'?'+qs.join('&'):''));showDom(r);if(!quiet)toast(t('dm_checked'))}catch(e){terr(e)}};
 verify(true);
 const applyDom=()=>{
 const d=dom.value.trim().toLowerCase();
 if(!d){toast(t('e_bad_domain'));return}
-ask(t('dm_confirm',d,ppNow),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),'https://'+d+(location.port?':'+location.port:'')+'/')},{danger:false})
+ask(pdOn?t('dm_confirm_pd',d,pdCur):t('dm_confirm',d,ppNow),t('confirm'),()=>{runJob('/api/domain',{domain:d,email:mail.value.trim()},t('dm_working'),pdOn?location.origin+'/':'https://'+d+(location.port?':'+location.port:'')+'/')},{danger:false})
+};
+const applyPd=()=>{
+const d=pdIn.value.trim().toLowerCase();
+if(!d){toast(t('e_bad_domain'));return}
+ask(t('pd_confirm',d,ppNow),t('confirm'),()=>{runJob('/api/panel-domain',{domain:d,email:mail.value.trim()},t('pd_working'),'https://'+d+'/')},{danger:false})
+};
+const removePd=()=>{
+ask(t('pd_remove_confirm',ppNow),t('confirm'),()=>{runJob('/api/panel-domain',{domain:''},t('pd_working_off'),'https://'+(s.domain||location.hostname)+':'+ppNow+'/')},{danger:false})
 };
 const ppIn=el('input',{type:'number',min:1024,max:65535,step:1,value:ppNow,dir:'ltr',style:'max-width:9rem'});
+const ppSave=btn(t('pp_save'),'floppy-disk',()=>savePort(),'pri');
+const pdOff=btn(t('pd_remove'),'xmark',()=>removePd());
+pdOff.style.display=pdCur?'':'none';
 ppIn.addEventListener('input',()=>{ppDirty=true});
 const savePort=()=>{
 const p=parseInt(ppIn.value,10);
@@ -738,7 +756,7 @@ el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('spa
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
 panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
 sessionsCard(s,v=>{totpOn=v;setCdF()}),
-panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))),field(t('pp_label'),ppIn,t('pp_hint')),el('div',{class:'row'},btn(t('pp_save'),'floppy-disk',savePort,'pri')))),
+panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))),field(t('pd_label'),pdIn,t('pd_hint')),el('div',{class:'row'},btn(t('pd_apply'),'lock',applyPd,'pri'),pdOff),field(t('pp_label'),ppIn,t('pp_hint')),el('div',{class:'row'},ppSave))),
 panel('puzzle-piece',t('cb_title'),compsBox()),
 panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
