@@ -2,7 +2,10 @@
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 REPO="${VPNPANEL_REPO:-tamaa-pro/isile}"
-BRANCH="${VPNPANEL_BRANCH:-main}"
+BRANCH="${VPNPANEL_BRANCH:-}"
+STABLE_BRANCH=latest-stable-version
+LATEST_BRANCH=main
+case "$BRANCH" in stable) BRANCH="$STABLE_BRANCH";; latest|public) BRANCH="$LATEST_BRANCH";; esac
 APP=/opt/vpnpanel
 DATA=/var/lib/vpnpanel
 LOG=/var/log/isile-install.log
@@ -61,10 +64,6 @@ ALT=1
 printf '\e[?1049h' >&9
 trap ui_cleanup EXIT
 trap ui_interrupt INT TERM HUP
-ui_msg "Checking the latest version..."
-local re='^[0-9A-Za-z .+_-]{1,32}$'
-PRE_V="$(curl -fsSL --max-time 6 -H 'Cache-Control: no-cache' "https://raw.githubusercontent.com/$REPO/$BRANCH/panel/VERSION?t=$(date +%s)" 2>/dev/null | head -n1 | tr -d '\r' || true)"
-[[ "$PRE_V" =~ $re ]] || PRE_V=""
 }
 ui_msg(){
 if [ "$UI" = 1 ]; then
@@ -242,7 +241,8 @@ if [ "$MODE" = update ]; then msg="isile updated successfully ($OLDV $g_arr $NEW
 printf '\e[?25h\e[H\e[2J'
 banner_s "$([ "$MODE" = update ] && echo Updated || echo Installed)" "v$NEWV" "$c_g"
 printf '\n  %s%s  %s%s\n\n' "$c_bg" "$g_ok" "$msg" "$c_rs"
-printf '  %s%-10s%s %s%s%s\n' "$c_d" "Panel URL" "$c_rs" "$c_bc" "$SCHEME://$PUB:$PANEL_PORT" "$c_rs"
+printf '  %s%-10s%s %s%s%s\n' "$c_d" "Panel URL" "$c_rs" "$c_bc" "$PANEL_URL" "$c_rs"
+printf '  %s%-10s%s %s\n' "$c_d" "Version" "$c_rs" "$(chan_name)"
 if [ "$MODE" = update ]; then
 printf '  %s%-10s%s %s\n' "$c_d" "Accounts" "$c_rs" "admin credentials were not changed"
 else
@@ -252,7 +252,7 @@ fi
 printf '\n'
 if [ "$MODE" = install ]; then
 if [ -n "$DOMAIN" ]; then
-ui_wrap "Open in the cloud firewall: TCP 80, 443, $PANEL_PORT and your SSH port." "${c_c}•${c_rs} "
+if [ "$PANEL_ACTIVE" = 1 ]; then ui_wrap "Open in the cloud firewall: TCP 80, 443 and your SSH port. The panel is served on 443 from its subdomain, so no panel port is needed." "${c_c}•${c_rs} "; else ui_wrap "Open in the cloud firewall: TCP 80, 443, $PANEL_PORT and your SSH port." "${c_c}•${c_rs} "; fi
 ui_wrap "SSH SSL: direct SSH on 80 (no TLS) and 443 (TLS via stunnel)." "${c_c}•${c_rs} "
 else
 if [ "$SCHEME" = https ]; then ui_wrap "No domain: the panel uses a self-signed certificate (the browser warns once); connections use plain HTTP without TLS." "${c_c}•${c_rs} "; else ui_wrap "No domain: the panel and connections use plain HTTP without TLS." "${c_c}•${c_rs} "; fi
@@ -276,7 +276,7 @@ printf '\n'
 IFS= read -r _ </dev/tty || true
 ui_leave
 echo "$msg"
-echo "Panel URL: $SCHEME://$PUB:$PANEL_PORT"
+echo "Panel URL: $PANEL_URL"
 echo "Type  isile  to open the management menu."
 }
 die(){
@@ -333,12 +333,59 @@ L(){
 echo "+ $*" >>"$LOG"
 if ! "$@" >>"$LOG" 2>&1; then FAILED_CMD="$*"; return 1; fi
 }
+ver_of(){
+# ver_of BRANCH: prints the panel version published on that branch (nothing when it cannot be fetched)
+local v re='^[0-9A-Za-z .+_-]{1,32}$'
+v="$(curl -fsSL --max-time 5 -H 'Cache-Control: no-cache' "https://raw.githubusercontent.com/$REPO/$1/panel/VERSION?t=$(date +%s)" 2>/dev/null | head -n1 | tr -d '\r' || true)"
+[[ "$v" =~ $re ]] || v=""
+printf '%s' "$v"
+}
+chan_name(){
+case "$BRANCH" in
+"$STABLE_BRANCH") echo "stable";;
+"$LATEST_BRANCH") echo "latest (may be unstable)";;
+*) echo "$BRANCH";;
+esac
+}
+pick_channel(){
+# Chooses the branch: stable ($STABLE_BRANCH) or the latest public version ($LATEST_BRANCH).
+# VPNPANEL_BRANCH (stable, latest or a branch name) skips the question. Without a terminal the current channel is kept (stable on a new install).
+local cur="" def=1 sv lv v err="" t1 t2 title help
+if [ -n "$BRANCH" ]; then
+if [ "$UI" = 1 ]; then ui_msg "Checking the latest version..."; PRE_V="$(ver_of "$BRANCH")"; fi
+return 0
+fi
+if [ "$MODE" = update ] && [ -s "$APP/.repo" ]; then read -r _ cur <"$APP/.repo" || true; fi
+if [ "$cur" = "$LATEST_BRANCH" ]; then def=2; fi
+if ! { : </dev/tty; } 2>/dev/null; then
+if [ "$def" = 2 ]; then BRANCH="$LATEST_BRANCH"; else BRANCH="$STABLE_BRANCH"; fi
+return 0
+fi
+ui_msg "Checking the available versions..."
+sv="$(ver_of "$STABLE_BRANCH")"; lv="$(ver_of "$LATEST_BRANCH")"
+t1="Latest stable version${sv:+ (v$sv)}"; t2="Latest public version${lv:+ (v$lv)}"
+if [ "$MODE" = update ]; then title="Update to which version?"; else title="Which version do you want to install?"; fi
+help="1  $t1 (recommended)"$'\n'"    Tested and free of known problems."$'\n\n'"2  $t2"$'\n'"    Has the newest changes and additions, but it is not guaranteed to be stable and may contain bugs."$'\n\n'"Press Enter for $def."
+while true; do
+if [ "$UI" = 1 ]; then q_screen "$title" "$help" "$err"; IFS= read -r v </dev/tty || die "cannot read from the terminal"
+else [ -z "$err" ] || echo "$err"; echo "$title"; echo "$help"; IFS= read -rp "Choose 1 or 2 [$def]: " v </dev/tty; fi
+v="${v//[[:space:]]/}"
+[ -n "$v" ] || v="$def"
+case "$v" in
+1) BRANCH="$STABLE_BRANCH"; PRE_V="$sv"; break;;
+2) BRANCH="$LATEST_BRANCH"; PRE_V="$lv"; break;;
+esac
+err="Type 1 or 2."
+done
+}
 [ "$(id -u)" -eq 0 ] || die "run this script as root"
 : > "$LOG"
 . /etc/os-release
 [ "$ID" = "ubuntu" ] || die "Ubuntu only (found: $ID)"
 OLDV="$(cat "$APP/panel/VERSION" 2>/dev/null || echo none)"
 ui_init
+STEP="choosing the version"
+pick_channel
 UDPC=no
 VAYDNS=no
 VAYDNS_DOM=""
@@ -346,6 +393,9 @@ WANT_XRAY=1
 WANT_WS=1
 SELFSIGNED=no
 PANEL_PORT=2096
+PANEL_DOM=""
+PANEL_CF=0
+PANEL_ACTIVE=0
 if [ "$MODE" = install ]; then
 STEP="reading settings"
 v_domain(){ [ -z "$1" ] || [[ "$1" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || echo "That is not a valid domain name."; }
@@ -361,12 +411,23 @@ sys.exit(0 if any(ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(n) f
 PYCF
 }
 q_text DOMAIN "Domain" "Enter a domain that points to this server to get HTTPS (TLS)."$'\n'"Press Enter to skip and use the server address without TLS." "" v_domain f_lower
+v_pdom(){ local r; r="$(v_domain "$1")"; if [ -n "$r" ]; then echo "$r"; elif [ -n "$1" ] && [ "$1" = "$DOMAIN" ]; then echo "The panel subdomain must be different from the main domain."; fi; }
+if [ -n "$DOMAIN" ]; then
+if [ -n "${ISILE_PANEL_DOMAIN:-}" ]; then
+PANEL_DOM="$(f_lower "$ISILE_PANEL_DOMAIN")"
+R="$(v_pdom "$PANEL_DOM")"
+[ -z "$R" ] || die "invalid panel subdomain $PANEL_DOM: $R"
+else
+q_text PANEL_DOM "Panel subdomain" "Optional: open the panel from its own subdomain (for example panel.$DOMAIN) over HTTPS on port 443 instead of a separate port."$'\n'"Create its DNS record first (the Cloudflare proxy works). The main domain used by the protocols is not changed."$'\n'"Press Enter to skip and use a panel port." "" v_pdom f_lower
+fi
+fi
 EMAIL=""
 if [ -n "$DOMAIN" ]; then
 q_text EMAIL "Email for certificate notices" "Optional: Let's Encrypt sends expiry notices to this address."$'\n'"Press Enter to skip." ""
 else
 if q_yn "Self-signed certificate" "No domain: the panel is served over plain HTTP unless you create a self-signed certificate."$'\n'"It encrypts the connection, but the browser shows a warning once."$'\n'"Create one for the panel?"; then SELFSIGNED=yes; fi
 fi
+ask_port(){
 if [ -n "${ISILE_PANEL_PORT:-}" ]; then
 PANEL_PORT="${ISILE_PANEL_PORT}"
 R="$(port_bad "$PANEL_PORT" nginx)"
@@ -375,6 +436,9 @@ else
 q_text PANEL_PORT "Panel port" "The port the panel listens on."$'\n'"Press Enter for 2096. The Cloudflare proxy supports 2053, 2083, 2087, 2096 and 8443." "2096" v_port
 fi
 PANEL_PORT=$((10#$PANEL_PORT))
+}
+# With a panel subdomain the panel is served on 443 and the port is only a fallback (kept at 2096 unless set with ISILE_PANEL_PORT).
+if [ -z "$PANEL_DOM" ] || [ -n "${ISILE_PANEL_PORT:-}" ]; then ask_port; fi
 q_text ADMIN_USER "Admin username" "The account you sign in to the panel with." "" v_user
 q_password ADMIN_PASS
 STEP="detecting server address"
@@ -392,6 +456,21 @@ q_yn "Cloudflare proxy detected" "$DOMAIN is behind the Cloudflare proxy (orange
 else
 q_yn "Domain does not point to this server" "$DOMAIN resolves to '${DOM_IP:-nothing}' but this server is $SERVER_IP."$'\n'"The certificate will fail until the A record is fixed."$'\n\n'"Continue anyway?" || ui_abort "Cancelled: the domain does not point to this server."
 fi
+fi
+fi
+if [ -n "$PANEL_DOM" ]; then
+STEP="checking DNS"
+ui_msg "Checking DNS for $PANEL_DOM..."
+PD_IP="$(getent ahostsv4 "$PANEL_DOM" | awk 'NR==1{print $1}' || true)"
+if [ "$SERVER_IP" = "$PD_IP" ]; then
+:
+elif [ -n "$PD_IP" ] && is_cf "$PD_IP"; then
+PANEL_CF=1
+elif q_yn "Panel subdomain does not point to this server" "$PANEL_DOM resolves to '${PD_IP:-nothing}' but this server is $SERVER_IP."$'\n'"Its certificate cannot be issued until the DNS record is fixed."$'\n\n'"Continue anyway? If you answer no, the panel will use a port instead."; then
+:
+else
+PANEL_DOM=""
+ask_port
 fi
 fi
 STEP="optional components"
@@ -412,6 +491,7 @@ VAYDNS_DOM="$(echo "${ISILE_VAYDNS_DOMAIN:-}" | tr 'A-Z' 'a-z' | tr -d ' ')"
 if [ -n "$VAYDNS_DOM" ]; then
 [[ "$VAYDNS_DOM" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid tunnel domain: $VAYDNS_DOM"
 [ "$VAYDNS_DOM" != "$DOMAIN" ] || die "the VayDNS tunnel domain must be different from the panel domain"
+if [ -n "$PANEL_DOM" ] && { [ "$VAYDNS_DOM" = "$PANEL_DOM" ] || [[ "$PANEL_DOM" == *".$VAYDNS_DOM" ]]; }; then die "the VayDNS tunnel domain must be different from the panel subdomain and cannot be a parent of it"; fi
 fi
 fi
 else
@@ -420,6 +500,7 @@ STEP="reading current settings"
 if [ "$(dbget comp_xray)" = 0 ]; then WANT_XRAY=0; fi
 if [ "$(dbget comp_wsbridge)" = 0 ]; then WANT_WS=0; fi
 DOMAIN="$(dbget domain)"
+PANEL_DOM="$(dbget panel_domain)"
 PANEL_PORT="$(dbget port_panel)"
 if ! [[ "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PANEL_PORT" -lt 1024 ] || [ "$PANEL_PORT" -gt 65535 ]; then PANEL_PORT=2080; python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=30);c.execute("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",("port_panel","2080"));c.commit()' "$DATA/panel.db" || true; fi
 SERVER_IP="$(detect_ip)"
@@ -503,7 +584,10 @@ systemctl reload ssh >>"$LOG" 2>&1 || true
 STEP="issuing TLS certificate"
 if [ -n "$DOMAIN" ]; then step 6; else step_skip 6 "No domain, skipping TLS certificate" "no domain"; fi
 if [ -n "$DOMAIN" ]; then
-if [ ! -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+NEEDCERT=0
+[ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] || NEEDCERT=1
+[ -z "$PANEL_DOM" ] || [ -s "/etc/letsencrypt/live/$PANEL_DOM/fullchain.pem" ] || NEEDCERT=1
+if [ "$NEEDCERT" = 1 ]; then
 systemctl stop vpnmux vpnstunnel >>"$LOG" 2>&1 || true
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/vpnpanel.conf <<EOT
@@ -519,10 +603,23 @@ EOT
 L nginx -t || die "nginx configuration test failed"
 L systemctl enable nginx
 L systemctl restart nginx || die "nginx failed to start (is another service using port 80?)"
+if [ ! -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
 CB=(certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos --keep-until-expiring)
 if [ -n "$EMAIL" ]; then CB+=(-m "$EMAIL"); else CB+=(--register-unsafely-without-email); fi
 L certbot "${CB[@]}" || die "certificate issuance failed (check the DNS A record and that port 80 is open in the cloud firewall)"
 [ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] || die "certificate file was not created"
+fi
+if [ -n "$PANEL_DOM" ] && [ ! -s "/etc/letsencrypt/live/$PANEL_DOM/fullchain.pem" ]; then
+# The panel subdomain has its own certificate; if it cannot be issued the install goes on with the panel port instead.
+CBP=(certonly --webroot -w /var/www/certbot -d "$PANEL_DOM" --non-interactive --agree-tos --keep-until-expiring)
+if [ -n "$EMAIL" ]; then CBP+=(-m "$EMAIL"); else CBP+=(--register-unsafely-without-email); fi
+if L certbot "${CBP[@]}" && [ -s "/etc/letsencrypt/live/$PANEL_DOM/fullchain.pem" ]; then
+:
+else
+FAILED_CMD=""
+warn_note "The certificate for the panel subdomain $PANEL_DOM could not be issued (check its DNS record and Cloudflare Always Use HTTPS). The panel uses port $PANEL_PORT instead: set the subdomain later from the isile menu or the panel Settings."
+fi
+fi
 fi
 install -d /etc/letsencrypt/renewal-hooks/deploy
 printf '#!/bin/sh\nsystemctl reload nginx\nsystemctl try-restart vpnstunnel\n' > /etc/letsencrypt/renewal-hooks/deploy/vpnpanel-nginx.sh
@@ -588,7 +685,9 @@ ProtectHome=true
 WantedBy=multi-user.target
 EOT
 if [ "$MODE" = install ]; then
-VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" VPN_SERVER_IP="$SERVER_IP" VPN_PANEL_PORT="$PANEL_PORT" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
+PD_ENV=""
+if [ -n "$DOMAIN" ] && [ -n "$PANEL_DOM" ] && [ -s "/etc/letsencrypt/live/$PANEL_DOM/fullchain.pem" ]; then PD_ENV="$PANEL_DOM"; fi
+VPN_ADMIN_USER="$ADMIN_USER" VPN_ADMIN_PASS="$ADMIN_PASS" VPN_DOMAIN="$DOMAIN" VPN_PANEL_DOMAIN="$PD_ENV" VPN_SERVER_IP="$SERVER_IP" VPN_PANEL_PORT="$PANEL_PORT" "$APP/venv/bin/python" "$APP/panel/app.py" setup >>"$LOG" 2>&1 || die "panel initialization failed"
 else
 if [ -n "$SERVER_IP" ]; then VPN_SERVER_IP="$SERVER_IP" "$APP/venv/bin/python" "$APP/panel/app.py" setserver >>"$LOG" 2>&1 || true; fi
 fi
@@ -620,6 +719,12 @@ fi
 fi
 STEP="configuring nginx"
 bash "$APP/panel/setdomain.sh" --render "$DOMAIN" >>"$LOG" 2>&1 || die "nginx configuration failed"
+PANEL_ACTIVE=0
+if [ -n "$DOMAIN" ]; then
+PDB="$(dbget panel_domain)"
+if [ -n "$PDB" ] && [ "$PDB" != "$DOMAIN" ] && [ -s "/etc/letsencrypt/live/$PDB/fullchain.pem" ]; then PANEL_ACTIVE=1; PANEL_DOM="$PDB"; fi
+fi
+if [ "$PANEL_ACTIVE" = 1 ] && [ "$PANEL_CF" = 1 ]; then warn_note "The panel subdomain is behind the Cloudflare proxy: set Cloudflare SSL/TLS to Full (strict) or the panel will not open."; fi
 if [ "$UDPC" = yes ]; then
 STEP="installing UDP Custom"
 echo "Installing UDP Custom (optional)"
@@ -646,7 +751,11 @@ step 8
 L ufw allow "$SSH_PORT/tcp"
 L ufw allow 80/tcp
 if [ -n "$DOMAIN" ]; then L ufw allow 443/tcp; fi
+if [ "$PANEL_ACTIVE" = 1 ]; then
+ufw delete allow "$PANEL_PORT/tcp" >>"$LOG" 2>&1 || true
+else
 L ufw allow "$PANEL_PORT/tcp"
+fi
 L ufw --force enable
 L systemctl daemon-reload
 EN="vpnpanel vpnmux"
@@ -737,14 +846,21 @@ fi
 if [ -n "$DOMAIN" ]; then SCHEME=https; PUB="$DOMAIN"
 elif [ "$(dbget selfsigned)" = 1 ] && [ -s /etc/vpnpanel/selfsigned/cert.pem ]; then SCHEME=https; PUB="${SERVER_IP:-$(dbget server_ip)}"
 else SCHEME=http; PUB="${SERVER_IP:-$(dbget server_ip)}"; fi
+PANEL_URL="$SCHEME://$PUB:$PANEL_PORT"
+if [ "$PANEL_ACTIVE" = 1 ]; then PANEL_URL="https://$PANEL_DOM"; fi
 CODE=000
 for i in $(seq 1 20); do
+if [ "$PANEL_ACTIVE" = 1 ]; then
+CODE="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$PANEL_DOM:443:127.0.0.1" "https://$PANEL_DOM/login" || true)"
+else
 CODE="$(curl -ks -o /dev/null -w '%{http_code}' "$SCHEME://127.0.0.1:$PANEL_PORT/login" || true)"
+fi
 [ "$CODE" = 200 ] && break
 sleep 1
 done
 if [ "$CODE" != 200 ]; then
 journalctl -u vpnpanel -n 12 --no-pager >>"$LOG" 2>&1 || true
+if [ "$PANEL_ACTIVE" = 1 ]; then die "the panel did not answer on https://$PANEL_DOM (HTTP $CODE)"; fi
 die "the panel did not answer on port $PANEL_PORT (HTTP $CODE)"
 fi
 if [ "$UI" = 1 ]; then
@@ -755,17 +871,19 @@ echo "=================================================="
 if [ "$MODE" = update ]; then
 echo "  isile updated successfully ($OLDV -> $NEWV)"
 echo "=================================================="
-echo " Panel URL : $SCHEME://$PUB:$PANEL_PORT"
+echo " Panel URL : $PANEL_URL"
+echo " Version   : $(chan_name)"
 echo " Your admin credentials were not changed."
 else
 echo "  isile $NEWV installed successfully"
 echo "=================================================="
-echo " Panel URL : $SCHEME://$PUB:$PANEL_PORT"
+echo " Panel URL : $PANEL_URL"
+echo " Version   : $(chan_name)"
 echo " Username  : $ADMIN_USER"
 echo " Password  : $ADMIN_PASS"
 echo "--------------------------------------------------"
 if [ -n "$DOMAIN" ]; then
-echo " Open ports 80, 443, $PANEL_PORT and your SSH port in the cloud firewall."
+if [ "$PANEL_ACTIVE" = 1 ]; then echo " Open ports 80, 443 and your SSH port in the cloud firewall (the panel uses 443 through its subdomain)."; else echo " Open ports 80, 443, $PANEL_PORT and your SSH port in the cloud firewall."; fi
 echo " SSH SSL: direct SSH on 80 (no TLS) and 443 (TLS via stunnel)."
 else
 if [ "$SCHEME" = https ]; then echo " No domain: the panel uses a self-signed certificate (the browser will warn once); connections use plain HTTP without TLS."; else echo " No domain: the panel and connections use plain HTTP without TLS."; fi
@@ -786,7 +904,7 @@ echo " VayDNS is installed but has no tunnel domain yet: set it in Settings > Co
 fi
 fi
 echo " Type  isile  to open the management menu (admin account, two-step verification,"
-echo " domain, panel port, services, reset, restart, update and uninstall)."
+echo " domain, panel subdomain, panel port, services, reset, restart, update and uninstall)."
 fi
 echo "=================================================="
 fi
