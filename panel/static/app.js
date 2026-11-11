@@ -767,21 +767,32 @@ panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t(
 panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),el('div',{class:'kv'},el('span',{},t('bn_on')),bnSw),bnBox,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn({banner:bn.value,banner_on:bnOn}),'pri'),btn(t('bn_reset'),'rotate-left',async()=>{bn.value=s.banner_default||'';await saveBn({banner:bn.value,banner_on:bnOn})})))),
 panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},
-kv(t('sys_version'),VERSION),
-latestRow(),
+kv(t('sys_version'),VERSION,pill('off',t(s.channel==='latest'?'ch_latest_s':'ch_stable_s'))),
+...latestRow(),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
-row('cloud-arrow-down',t('sys_update'),t('sys_update_desc'),btn('','cloud-arrow-down',()=>ask(t('sys_update_confirm'),t('sys_update'),()=>{runJob('/api/system/update',null,t('sys_w_update'))},{danger:false}))),
+row('cloud-arrow-down',t('sys_update'),t('sys_update_desc'),btn('','cloud-arrow-down',()=>askUpdate(s.channel))),
 row('broom',t('sys_reset'),t('sys_reset_desc'),btn('','broom',doReset,'dgr')),
 row('trash',t('sys_uninstall'),t('sys_uninstall_desc'),btn('','trash',doUninstall,'dgr'))))))
 }
-const RAW='https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/main/panel/VERSION';
-const fetchLatest=async()=>{try{const r=await fetch(RAW+'?t='+Date.now(),{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer'});if(!r.ok)throw 0;const v=(await r.text()).trim().split('\n')[0].trim();if(!/^[0-9A-Za-z .+_-]{1,32}$/.test(v))throw 0;return{latest:v}}catch(e){return api('GET','/api/system/latest')}};
+const RAWB='https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/',BR_STABLE='latest-stable-version',BR_LATEST='main',VRE=/^[0-9A-Za-z .+_-]{1,32}$/;
+let VERS={};
+const fetchBr=async b=>{const r=await fetch(RAWB+b+'/panel/VERSION?t='+Date.now(),{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer'});if(!r.ok)throw 0;const v=(await r.text()).trim().split('\n')[0].trim();if(!VRE.test(v))throw 0;return v};
+const fetchLatest=async()=>{const one=b=>fetchBr(b).catch(()=>'');const[a,l]=await Promise.all([one(BR_STABLE),one(BR_LATEST)]);if(a&&l)return{stable:a,latest:l};try{const r=await api('GET','/api/system/latest');return{stable:a||r.stable||'',latest:l||r.latest||''}}catch(e){if(a||l)return{stable:a,latest:l};throw e}};
+const vcmp=(a,b)=>{const x=a.split(/\D+/).filter(Boolean).map(Number),y=b.split(/\D+/).filter(Boolean).map(Number);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]||0)-(y[i]||0);if(d)return d>0?1:-1}return 0};
+const verPill=v=>{if(!v)return pill('off',t('sys_latest_err'));const c=vcmp(v,VERSION);return c>0?pill('warn',t('sys_new')):c===0?pill('ok',t('sys_uptodate')):pill('off',t('sys_older'))};
 function latestRow(){
-const b=el('b',{class:'ltr'},'…');
-const g=el('div',{class:'kv-v'},b);
-const d=el('div',{class:'kv'},el('span',{},t('sys_latest')),g);
-fetchLatest().then(r=>{b.textContent=r.latest;g.prepend(r.latest===VERSION?pill('ok',t('sys_uptodate')):pill('warn',t('sys_new')))}).catch(()=>{b.textContent=t('sys_latest_err')});
-return d}
+const mk=lbl=>{const b=el('b',{class:'ltr'},'…');const g=el('div',{class:'kv-v'},b);return{b,g,d:el('div',{class:'kv'},el('span',{},lbl),g)}};
+const a=mk(t('sys_stable')),l=mk(t('sys_public'));
+fetchLatest().then(r=>{VERS=r;for(const[x,v]of[[a,r.stable],[l,r.latest]]){x.b.textContent=v||'—';x.g.prepend(verPill(v))}}).catch(()=>{a.b.textContent=l.b.textContent=t('sys_latest_err')});
+return[a.d,l.d]}
+function askUpdate(cur){
+let ch=cur==='latest'?'latest':'stable';
+const hint=el('div',{class:'muted sm'});
+const paint=()=>{hint.textContent=t(ch==='latest'?'ch_latest_hint':'ch_stable_hint')};
+const vl=(k,v)=>t(k)+(v?' · '+v:'');
+const sg=seg([{v:'stable',l:vl('ch_stable',VERS.stable),i:'shield-halved'},{v:'latest',l:vl('ch_latest',VERS.latest),i:'flask'}],ch,v=>{ch=v;paint()});
+paint();
+ask(t('sys_update_confirm'),t('sys_update'),()=>{runJob('/api/system/update',{channel:ch},t('sys_w_update'))},{danger:false,extra:el('div',{class:'stack'},sg,hint)})}
 function setLang(v){
 localStorage.setItem('lang',v);
 const d=document.documentElement;d.lang=v;d.dir=v==='ar'?'rtl':'ltr';LANG=v;
