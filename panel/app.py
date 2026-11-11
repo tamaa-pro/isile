@@ -1606,7 +1606,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode()}
+    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode(),"channel":channel_of(repo_info()[1])}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1963,20 +1963,47 @@ def panel_port_set():
     if e:
         return err("system",500,e)
     return jsonify(ok=True,port=p)
-LATEST_URL="https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/main/panel/VERSION"
-@app.get("/api/system/latest")
-@auth
-def latest_version():
-    v=""
+STABLE_BRANCH="latest-stable-version"
+LATEST_BRANCH="main"
+def repo_info():
+    """(repository, branch) the panel was installed or last updated from (/opt/vpnpanel/.repo)."""
+    r,b="tamaa-pro/isile",LATEST_BRANCH
     try:
-        req=Request(LATEST_URL+"?t=%d"%int(time.time()*1000),headers={"User-Agent":"isile","Cache-Control":"no-cache, no-store","Pragma":"no-cache"})
+        with open(os.path.join(os.path.dirname(BASE),".repo")) as f:
+            p=f.read().split()
+        if p and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",p[0]):
+            r=p[0]
+        if len(p)>1 and re.fullmatch(r"[A-Za-z0-9_./-]+",p[1]):
+            b=p[1]
+    except Exception:
+        pass
+    return r,b
+def channel_of(b):
+    return "stable" if b==STABLE_BRANCH else "latest"
+def fetch_ver(repo,branch):
+    try:
+        req=Request("https://raw.githubusercontent.com/%s/%s/panel/VERSION?t=%d"%(repo,branch,int(time.time()*1000)),headers={"User-Agent":"isile","Cache-Control":"no-cache, no-store","Pragma":"no-cache"})
         with urlopen(req,timeout=6) as r:
             v=r.read(256).decode("utf-8","replace").strip().splitlines()[0].strip()
     except Exception:
-        v=""
-    if not re.fullmatch(r"^[0-9A-Za-z .+_-]{1,32}$",v):
+        return ""
+    return v if re.fullmatch(r"[0-9A-Za-z .+_-]{1,32}",v) else ""
+@app.get("/api/system/latest")
+@auth
+def latest_version():
+    repo,b=repo_info()
+    out={}
+    def go(k,br):
+        out[k]=fetch_ver(repo,br)
+    ts=[threading.Thread(target=go,args=(k,br),daemon=True) for k,br in (("stable",STABLE_BRANCH),("latest",LATEST_BRANCH))]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(8)
+    st,lt=out.get("stable",""),out.get("latest","")
+    if not st and not lt:
         return err("unavailable",502)
-    return jsonify(latest=v)
+    return jsonify(stable=st,latest=lt,channel=channel_of(b))
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
@@ -1989,8 +2016,12 @@ def sys_restart():
 @app.post("/api/system/update")
 @auth
 def sys_update():
-    audit("system-update")
-    e=start_job("update","/usr/local/bin/isile update")
+    d=request.get_json(silent=True) or {}
+    ch=str(d.get("channel","")).strip()
+    if ch not in ("","stable","latest"):
+        return err("bad_channel")
+    audit("system-update",ch or "current")
+    e=start_job("update","/usr/local/bin/isile update %s"%ch)
     if e:
         return err("system",500,e)
     return jsonify(ok=True)
