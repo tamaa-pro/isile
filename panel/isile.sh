@@ -5,6 +5,8 @@ PY="$APP/venv/bin/python"
 LOG=/var/log/isile-install.log
 [ "$(id -u)" -eq 0 ] || { echo "Run as root: sudo isile"; exit 1; }
 [ -f "$DATA/panel.db" ] || { echo "isile is not installed"; exit 1; }
+STABLE_BRANCH=latest-stable-version
+LATEST_BRANCH=main
 DOMAIN_RE='^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
 EMAIL_RE='^[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
 dbget(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);r=c.execute("SELECT v FROM settings WHERE k=?",(sys.argv[2],)).fetchone();print(r[0] if r else "")' "$DATA/panel.db" "$1"; }
@@ -103,23 +105,52 @@ else SCHEME=http; HOSTN="${IP:-server-address}"; fi
 URL="$SCHEME://$HOSTN:$PORT"
 if [ "$PDACT" = 1 ]; then URL="https://$PDOM"; fi
 }
+repo_read(){
+# RP = repository, BR = branch (channel) the panel was installed from; old installs without .repo came from main
+local r="" b=""
+RP="tamaa-pro/isile"; BR="$LATEST_BRANCH"
+if [ -f "$APP/.repo" ]; then read -r r b <"$APP/.repo" || true; fi
+if [ -n "$r" ]; then RP="$r"; fi
+if [ -n "$b" ]; then BR="$b"; fi
+}
+chan_label(){
+case "$1" in
+"$STABLE_BRANCH") echo "stable";;
+"$LATEST_BRANCH") echo "latest";;
+*) echo "$1";;
+esac
+}
+ver_of(){ curl -fsSL --max-time 6 -H 'Cache-Control: no-cache' "https://raw.githubusercontent.com/$1/$2/panel/VERSION?t=$(date +%s)" 2>/dev/null | head -n1; }
 latest_ver(){
-local r="tamaa-pro/isile" b="main"
-[ -f "$APP/.repo" ] && read -r r b <"$APP/.repo"
-[ -n "$r" ] || r="tamaa-pro/isile"
-[ -n "$b" ] || b="main"
-curl -fsSL --max-time 6 -H 'Cache-Control: no-cache' "https://raw.githubusercontent.com/$r/$b/panel/VERSION?t=$(date +%s)" 2>/dev/null | head -n1
+# prints two lines: the version on the stable branch, then the version on the latest (main) branch
+local t l
+repo_read
+t="$(mktemp)"
+ver_of "$RP" "$STABLE_BRANCH" >"$t" &
+l="$(ver_of "$RP" "$LATEST_BRANCH")"
+wait
+printf '%s\n%s\n' "$(head -n1 "$t" | tr -d '\r')" "$(printf '%s' "$l" | tr -d '\r')"
+rm -f "$t"
+}
+cmp_state(){
+# none = unknown, same, newer or older than the installed version ($CUR)
+if [ -z "$1" ]; then echo none
+elif [ "$1" = "$CUR" ]; then echo same
+elif [ "$(printf '%s\n%s\n' "$CUR" "$1" | sort -V | tail -n1)" = "$1" ]; then echo newer
+else echo older; fi
 }
 check_update(){
 local re='^[0-9A-Za-z .+_-]{1,32}$'
 work "Checking for updates..." latest_ver
-LATEST="$(printf '%s' "$WOUT" | head -n1 | tr -d '\r')"
-[[ "$LATEST" =~ $re ]] || LATEST=""
+STABLE_V="$(printf '%s\n' "$WOUT" | sed -n 1p | tr -d '\r')"
+LATEST_V="$(printf '%s\n' "$WOUT" | sed -n 2p | tr -d '\r')"
+[[ "$STABLE_V" =~ $re ]] || STABLE_V=""
+[[ "$LATEST_V" =~ $re ]] || LATEST_V=""
 CUR="$(head -n1 "$APP/panel/VERSION" 2>/dev/null)"
-if [ -z "$LATEST" ]; then UPD=none
-elif [ "$LATEST" = "$CUR" ]; then UPD=same
-elif [ "$(printf '%s\n%s\n' "$CUR" "$LATEST" | sort -V | tail -n1)" = "$LATEST" ]; then UPD=newer
-else UPD=older; fi
+repo_read
+UPD_S="$(cmp_state "$STABLE_V")"; UPD_L="$(cmp_state "$LATEST_V")"
+# the menu indicator follows the channel the panel is installed from
+if [ "$BR" = "$STABLE_BRANCH" ]; then LATEST="$STABLE_V"; UPD="$UPD_S"; else LATEST="$LATEST_V"; UPD="$UPD_L"; fi
 }
 port_bad(){
 # prints why $1 cannot be the new panel port (nothing when it is fine)
@@ -143,7 +174,8 @@ show_info(){
 local s st svcs svc_col
 load
 local d="$DOMAIN" ip="$IP"
-kv "Version" "$(head -n1 "$APP/panel/VERSION" 2>/dev/null)"
+repo_read
+kv "Version" "$(head -n1 "$APP/panel/VERSION" 2>/dev/null)  ${c_d}($(chan_label "$BR"))${c_rs}"
 kv "Panel URL" "${c_bc}$URL${c_rs}"
 kv "Username" "$ADMIN"
 kv "Password" "${c_d}stored hashed, use option 1 to set a new one${c_rs}"
@@ -558,30 +590,80 @@ printf '    %-11s %s\n' "$u" "$st"
 done
 }
 update(){
-local r b
-r="tamaa-pro/isile"; b="main"
-[ -f "$APP/.repo" ] && read -r r b <"$APP/.repo"
-[ -n "$r" ] || r="tamaa-pro/isile"
-[ -n "$b" ] || b="main"
+# update [stable|latest]: without an argument the panel stays on the channel it was installed from
+local r b f rc want="${1:-}"
+repo_read; r="$RP"; b="$BR"
+case "$want" in
+stable) b="$STABLE_BRANCH";;
+latest) b="$LATEST_BRANCH";;
+"") ;;
+*) echo "Usage: isile update [stable|latest]"; return 1;;
+esac
 echo "Updating from github.com/$r ($b) ..."
-bash <(curl -fsSL "https://raw.githubusercontent.com/$r/$b/install.sh") --update
+f="$(mktemp)"
+if ! curl -fsSL --max-time 30 -o "$f" "https://raw.githubusercontent.com/$r/$b/install.sh"; then
+rm -f "$f"
+echo "Cannot download the installer from github.com/$r (branch $b): check the connection and that the branch exists."
+return 1
+fi
+VPNPANEL_REPO="$r" VPNPANEL_BRANCH="$b" bash "$f" --update
+rc=$?
+rm -f "$f"
+return $rc
 }
-update_panel(){
-local q
+ver_state(){
+# ver_state VERSION STATE: one line for the version list
+case "$2" in
+newer) printf '%s  %s%s update available%s' "$1" "$c_bg" "$g_up" "$c_rs";;
+same) printf '%s  %s(installed)%s' "$1" "$c_d" "$c_rs";;
+older) printf '%s  %s(older than the installed one)%s' "$1" "$c_d" "$c_rs";;
+*) printf '%scould not reach the repository%s' "$c_by" "$c_rs";;
+esac
+}
+channel_pick(){
+# Shows the installed, stable and latest versions and asks which one to update to. Sets PICK (stable|latest); returns 1 when cancelled.
+local a v st q
 check_update
-kv "Installed" "$CUR"
-case "$UPD" in
-newer) kv "Available" "${c_bg}$LATEST${c_rs}  ${c_bg}$g_up update available${c_rs}"; q="Update to $LATEST now? Accounts and settings are kept.";;
-same) kv "Available" "$LATEST  ${c_d}(up to date)${c_rs}"; q="You are on the latest version. Reinstall it anyway?";;
-older) kv "Available" "$LATEST  ${c_d}(older than the installed one)${c_rs}"; q="The repository has an older version. Install it anyway?";;
-*) kv "Available" "${c_by}could not reach the repository${c_rs}"; q="Try the update anyway?";;
+kv "Installed" "$CUR  ${c_d}($(chan_label "$BR"))${c_rs}"
+kv "Stable" "$(ver_state "$STABLE_V" "$UPD_S")"
+kv "Latest" "$(ver_state "$LATEST_V" "$UPD_L")"
+echo
+info "Stable: the latest tested version, free of known problems (recommended)."
+info "Latest: the newest public version. It has the newest changes but it is"
+info "not guaranteed to be stable and may contain bugs."
+echo
+printf '  %s1%s Stable    %s2%s Latest    %sEnter%s Cancel\n' "$c_bc" "$c_rs" "$c_bc" "$c_rs" "$c_by" "$c_rs"
+ask "Update to which version? [1/2]" a
+a="${a//[[:space:]]/}"
+case "$a" in
+1) PICK=stable; v="$STABLE_V"; st="$UPD_S";;
+2) PICK=latest; v="$LATEST_V"; st="$UPD_L"; warn "The latest version may be unstable and contain bugs.";;
+*) return 1;;
+esac
+case "$st" in
+same) q="You already have this version. Reinstall it anyway?";;
+older) q="This version is older than the installed one. Install it anyway?";;
+none) q="Could not reach the repository. Try the update anyway?";;
+*) q="Update to $v now? Accounts and settings are kept.";;
 esac
 echo
-yn "$q" || { cancelled; return 9; }
+yn "$q"
+}
+update_panel(){
+channel_pick || { cancelled; return 9; }
 echo
 if [ "$ALT" = 1 ]; then printf '\e[?25h\e[?1049l'; ALT=0; fi
-update
+update "$PICK"
 UPDATED=1
+}
+update_cli(){
+local w="${1:-}"
+if [ -z "$w" ] && [ -t 0 ] && [ -t 1 ]; then
+channel_pick || { echo "Cancelled, nothing was changed."; return 0; }
+echo
+w="$PICK"
+fi
+update "$w"
 }
 uninstall(){
 local ans d n pp pd
@@ -734,14 +816,14 @@ case "$c" in
 esac
 done
 }
-usage(){ echo "Usage: isile            open the management menu"; echo "       isile info       show panel information"; echo "       isile update     update to the latest version"; echo "       isile port N     change the panel port"; echo "       isile uninstall  remove the panel completely"; }
+usage(){ echo "Usage: isile            open the management menu"; echo "       isile info       show panel information"; echo "       isile update     update (asks: latest stable or latest public version)"; echo "       isile update stable|latest   update to that version without asking"; echo "       isile port N     change the panel port"; echo "       isile uninstall  remove the panel completely"; }
 case "${1:-}" in
 "") if [ -t 0 ] && [ -t 1 ]; then menu; else echo "The isile menu needs an interactive terminal (use: isile info)"; exit 1; fi;;
 info) echo "=================================================="; echo "  isile panel info"; echo "=================================================="; show_info; echo "==================================================";;
-update) update;;
+update) update_cli "${2:-}";;
 port) port_cli "${2:-}";;
 uninstall) uninstall "${2:-}";;
-4) update;;
+4) update_cli "${2:-}";;
 3) if [ "${2:-}" = "--yes" ]; then uninstall --yes; else usage; exit 1; fi;;
 *) usage; exit 1;;
 esac
