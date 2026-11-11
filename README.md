@@ -82,8 +82,17 @@ isile/
     ├── setdomain.sh
     ├── components.sh
     ├── requirements.txt
-    ├── templates/   (index.html, login.html, public.html)
-    └── static/      (app.js, app.css, i18n.js, theme.js, login.js, public.js)
+    └── templates/
+        ├── index.html
+        ├── login.html
+        └── public.html
+    └── static/
+        ├── app.js
+        ├── app.css
+        ├── i18n.js
+        ├── theme.js
+        ├── login.js
+        └── public.js
 ```
 
 | الملف | الوظيفة |
