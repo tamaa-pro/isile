@@ -770,6 +770,7 @@ L systemctl restart nginx
 L systemctl restart vpnmux
 if [ -f /etc/systemd/system/udp-custom.service ]; then L systemctl try-restart udp-custom; fi
 if [ -f /etc/systemd/system/vaydns.service ]; then L systemctl try-restart vaydns; fi
+if [ -f /etc/systemd/system/vpnsocks.service ]; then L systemctl try-restart vpnsocks; fi
 if [ -f /etc/systemd/system/slowdns.service ]; then L systemctl try-restart slowdns; fi
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 L systemctl enable vpnstunnel
@@ -787,7 +788,9 @@ VAYON=no
 case " $SVCS " in *" vaydns "*) VAYON=yes;; esac
 SLOWON=no
 case " $SVCS " in *" slowdns "*) SLOWON=yes;; esac
-SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /; s/ vaydns / /; s/ slowdns / /')"
+SOCKSON=no
+case " $SVCS " in *" vpnsocks "*) SOCKSON=yes;; esac
+SVCS="$(echo " $SVCS " | sed 's/ udp-custom / /; s/ vaydns / /; s/ slowdns / /; s/ vpnsocks / /')"
 for s in $SVCS; do
 ok=0
 for i in $(seq 1 20); do
@@ -806,6 +809,13 @@ fi
 if [ "$VAYON" = yes ] && ! systemctl is-active --quiet vaydns; then
 journalctl -u vaydns -n 12 --no-pager >>"$LOG" 2>&1 || true
 warn_note "VayDNS is not running (optional component, see $LOG). You can remove it from Settings > Components."
+fi
+if [ "$SOCKSON" = yes ]; then
+for i in $(seq 1 10); do systemctl is-active --quiet vpnsocks && break; sleep 1; done
+if ! systemctl is-active --quiet vpnsocks; then
+journalctl -u vpnsocks -n 12 --no-pager >>"$LOG" 2>&1 || true
+warn_note "The VayDNS Direct SOCKS5 server is not running (optional, see $LOG). You can turn it off in Settings > Components."
+fi
 fi
 if [ "$SLOWON" = yes ] && ! systemctl is-active --quiet slowdns; then
 journalctl -u slowdns -n 12 --no-pager >>"$LOG" 2>&1 || true
@@ -839,6 +849,10 @@ SSHB="$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/80; head -c 4 <&3' 2>/dev/
 [ "$SSHB" = "SSH-" ] || warn_note "direct SSH on port 80 did not answer, SSH SSL without TLS may not work (see $LOG)"
 SSHB="$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/10053; head -c 4 <&3' 2>/dev/null || true)"
 [ "$SSHB" = "SSH-" ] || warn_note "direct SSH on the VayDNS upstream (127.0.0.1:10053) did not answer, SSH over VayDNS may not work (see $LOG)"
+if systemctl is-active --quiet vpnsocks 2>/dev/null; then
+SOCKSB="$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/10053; printf "\005\001\002" >&3; head -c 2 <&3 | od -An -tx1 | tr -d " \n"' 2>/dev/null || true)"
+[ "$SOCKSB" = "0502" ] || warn_note "the SOCKS5 server did not answer on the VayDNS upstream (127.0.0.1:10053), VayDNS Direct may not work (see $LOG)"
+fi
 if [ -s /etc/vpnpanel/stunnel.conf ]; then
 SSHB="$( (sleep 4) | timeout 10 openssl s_client -quiet -connect 127.0.0.1:443 -servername "$DOMAIN" 2>/dev/null | head -c 4 || true)"
 [ "$SSHB" = "SSH-" ] || warn_note "direct SSH over TLS on port 443 did not answer, SSH SSL with TLS may not work (see $LOG)"

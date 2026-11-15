@@ -1,6 +1,6 @@
 # isile — لوحة تحكم VPN
 
-الإصدار الحالي: **1.9.1**
+الإصدار الحالي: **1.9.4**
 
 لوحة ويب خفيفة لإدارة حسابات الاتصال على خادم Ubuntu، تجمع عدة بروتوكولات في مكان واحد.
 
@@ -16,6 +16,7 @@
 | VLESS / VMess / Trojan + WebSocket أو gRPC أو XHTTP | ✔ (80) | ✔ |
 | SSH + VayDNS (اختياري، نفق DNS) | ✔ (داخل النفق) | — |
 | VLESS / VMess / Trojan + VayDNS (اختياري) | ✔ (داخل النفق) | ✔ (داخل النفق) |
+| VayDNS مباشر (SOCKS5 عبر نفق VayDNS، بدون SSH أو V2Ray) | ✔ (داخل النفق) | — |
 | SSH + SlowDNS (اختياري، نفق DNS لتطبيقات SlowDNS) | ✔ (داخل النفق) | — |
 | SSH + UDP Custom (اختياري، طرف ثالث) | منفذ UDP مستقل | — |
 
@@ -73,26 +74,27 @@ isile/
 ├── install.sh
 ├── README.md
 └── panel/
-    ├── VERSION
-    ├── app.py
-    ├── wsbridge.py
-    ├── sshmux.py
-    ├── sshconn.py
-    ├── isile.sh
-    ├── setdomain.sh
-    ├── components.sh
-    ├── requirements.txt
-    └── templates/
-        ├── index.html
-        ├── login.html
-        └── public.html
-    └── static/
-        ├── app.js
-        ├── app.css
-        ├── i18n.js
-        ├── theme.js
-        ├── login.js
-        └── public.js
+       ├── VERSION
+       ├── app.py
+       ├── wsbridge.py
+       ├── sshmux.py
+       ├── sshconn.py
+       ├── socksd.py
+       ├── isile.sh
+       ├── setdomain.sh
+       ├── components.sh
+       ├── requirements.txt
+       └── templates/
+              ├── index.html
+              ├── login.html
+              └── public.html
+       └── static/
+              ├── app.js
+              ├── app.css
+              ├── i18n.js
+              ├── theme.js
+              ├── login.js
+              └── public.js
 ```
 
 | الملف | الوظيفة |
@@ -101,11 +103,12 @@ isile/
 | `panel/VERSION` | رقم الإصدار |
 | `panel/app.py` | خادم اللوحة (Flask): قاعدة البيانات والحسابات والترافيك والمتصلين |
 | `panel/wsbridge.py` | جسر SSH WebSocket مع حماية من الاتصالات الفاشلة المتكررة |
-| `panel/sshmux.py` | منسّق المنفذ 80: يوجّه SSH المباشر إلى sshd وبقية الحركة إلى nginx مع حفظ IP العميل الحقيقي |
+| `panel/sshmux.py` | منسّق المنفذ 80: يوجّه SSH المباشر إلى sshd وبقية الحركة إلى nginx مع حفظ IP العميل الحقيقي، ويوجّه تحية SOCKS5 القادمة من نفق VayDNS إلى `socksd.py` |
+| `panel/socksd.py` | خادم SOCKS5 محلي لحسابات «VayDNS مباشر»: مصادقة باسم مستخدم وكلمة مرور، وعدّاد ترافيك لكل حساب |
 | `panel/sshconn.py` | عدّاد SSH: يعدّ جلسات sshd لكل حساب ويقطع الأحدث عند تجاوز الحد |
 | `panel/isile.sh` | أمر `isile` لقائمة الإدارة |
 | `panel/setdomain.sh` | يضيف النطاق ويصدر الشهادة ويولّد إعداد nginx و stunnel |
-| `panel/components.sh` | يثبّت ويحذف المكونات: Xray وجسر SSH WebSocket وUDP Custom وVayDNS وSlowDNS |
+| `panel/components.sh` | يثبّت ويحذف المكونات: Xray وجسر SSH WebSocket وUDP Custom وVayDNS (ومعه خدمة SOCKS5) وSlowDNS |
 | `panel/templates/`، `panel/static/` | الواجهة: الصفحات والسكربتات والتصميم والترجمة |
 
 ## آلية العمل
@@ -117,7 +120,7 @@ isile/
 العام (443) ──► stunnel (يفك TLS) ──► vpnmux ──┬─ SSH- ──► sshd
                                                ├─ PRI (HTTP/2، أي gRPC) ► nginx (10442) ──► V2Ray gRPC
                                                └─ غير ذلك ► nginx (10443) ──► V2Ray (WebSocket/XHTTP) / SSH WebSocket
-UDP 53 ──► موزّع DNS ──┬─ VayDNS ──► SSH / V2Ray
+UDP 53 ──► موزّع DNS ──┬─ VayDNS ──► SSH / V2Ray / SOCKS5 (vpnsocks)
                        └─ SlowDNS ──► SSH
 ```
 
@@ -126,9 +129,10 @@ UDP 53 ──► موزّع DNS ──┬─ VayDNS ──► SSH / V2Ray
 - **Xray** يتولى VLESS وVMess وTrojan على منافذ محلية، بمدخلين لكل بروتوكول (TLS وبدونه).
 - حسابات SSH مستخدمو نظام بلا shell، وترافيكهم بقواعد nftables، وترافيك V2Ray من إحصائيات Xray.
 - **عدّاد المتصلين:** دقيق لـ SSH فقط (عدّ عمليات sshd من `/proc`، وتُقطع الجلسات الأحدث عند تجاوز الحد). V2Ray بلا عدّاد ولا حد لأن بروتوكولاته لا تحمل هوية للجهاز؛ يبقى له مؤشر الاتصال وحد الترافيك والانتهاء.
-- الخدمات: `vpnpanel` و`vpnmux` و`nginx` دائماً، و`vpnbridge` و`vpnstunnel` و`xray` و`udp-custom` و`vpn-udpgw` و`vaydns` و`slowdns` بحسب المثبّت منها.
+- الخدمات: `vpnpanel` و`vpnmux` و`nginx` دائماً، و`vpnbridge` و`vpnstunnel` و`xray` و`udp-custom` و`vpn-udpgw` و`vaydns` و`vpnsocks` و`slowdns` بحسب المثبّت منها.
 - **UDP Custom** حزمة خارجية مغلقة المصدر، لا تُثبَّت إلا بموافقتك من الإعدادات ← المكونات والبروتوكولات بعد تحذير أمني (أو `ISILE_UDPC=yes` للتثبيت غير التفاعلي). تعمل بمستخدم بلا صلاحيات ويحجب الجدار أي اتصال صادر جديد منها، ويُثبَّت معها `badvpn-udpgw` لتمرير UDP داخل نفق SSH.
 - **VayDNS وSlowDNS** نفقا DNS مفتوحا المصدر (SlowDNS بنمط dnstt لتطبيقاته)، لكل منهما نطاق نفق خاص يحتاج سجل NS يشير إلى الخادم.
+- **VayDNS مباشر** (`socksdns`): حساب بلا SSH ولا V2Ray. يشغّل عميل VayDNS على جهازه (`-listen 127.0.0.1:7000`) ثم يضبط تطبيقه على بروكسي **SOCKS5** عند `127.0.0.1:7000` باسم المستخدم وكلمة المرور. يتعرّف vpnmux على تحية SOCKS5 (أول بايت `0x05`) في مسار النفق فقط ويحوّلها إلى خدمة `vpnsocks` على `127.0.0.1:10054`. يدعم TCP فقط (أمر CONNECT) ولا يدعم UDP ASSOCIATE، ويُحلّ اسم الموقع على الخادم (استخدم `socks5h`). الحسابات والحد والانتهاء تُطبَّق فوراً (تُقطع اتصالات الحساب خلال ثوانٍ عند تعطيله أو تجاوزه أو تغيير كلمة مروره)، ولا يُسمح بالوصول إلى الشبكة الداخلية ولا إلى عناوين الخادم نفسه. ليس له عدّاد أجهزة (لا يعرف الخادم هوية الجهاز عبر النفق)، فحدّ الاتصالات لا ينطبق عليه. يعمل مع مكوّن VayDNS ولا يحتاج تثبيتاً إضافياً، ويُعطَّل أو يُفعَّل من الإعدادات ← المكونات والبروتوكولات.
 - تعطيل تركيبة أو حذف مكوّنها يمنع إنشاء حسابات جديدة بها فقط.
 
 ## الأمان
