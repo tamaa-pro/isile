@@ -19,6 +19,9 @@ VAYDNS_URL="${VAYDNS_URL:-}"
 VAYDNS_SHA256="$(echo "${VAYDNS_SHA256:-}" | tr 'A-F' 'a-f' | tr -d ' ')"
 VAYDNS_UDP=5300
 VAYDNS_UPSTREAM=10053
+SOCKS_USER=vpnsocks
+SOCKS_USERS=/etc/vpnpanel/socks-users.json
+SOCKS_PORT=10054
 SLOWDNS_DIR=/usr/local/lib/isile/slowdns
 SLOWDNS_USER=slowdns
 SLOWDNS_ENV=/etc/vpnpanel/slowdns.env
@@ -383,9 +386,50 @@ chmod 644 "$DNSFRONT_NFT"
 # the redirect rewrites the destination port before the firewall sees it, so the front port must be open
 if command -v ufw >/dev/null 2>&1; then ufw allow "$DNSFRONT_UDP/udp" >/dev/null 2>&1 || true; fi
 }
+# VayDNS Direct: a SOCKS5 server (socksd.py) on 127.0.0.1:$SOCKS_PORT. The multiplexer sends it the tunnel connections that start with
+# the SOCKS5 greeting. It is local only and needs the username and password of a "VayDNS Direct" account; the panel writes the
+# active accounts to $SOCKS_USERS and reads the traffic back from /run/vpnsocks/stats.json.
+socks_files(){
+getent group "$SOCKS_USER" >/dev/null || groupadd -r "$SOCKS_USER"
+id "$SOCKS_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin -g "$SOCKS_USER" "$SOCKS_USER"
+install -d -m755 /etc/vpnpanel
+if [ -f "$SOCKS_USERS" ]; then chown "root:$SOCKS_USER" "$SOCKS_USERS"; chmod 640 "$SOCKS_USERS"; fi
+cat > /etc/systemd/system/vpnsocks.service <<EOT
+[Unit]
+Description=VayDNS Direct SOCKS5 server (local, behind the DNS tunnel)
+After=network.target
+[Service]
+User=$SOCKS_USER
+Group=$SOCKS_USER
+Environment=SOCKS_PORT=$SOCKS_PORT
+Environment=SOCKS_USERS=$SOCKS_USERS
+ExecStart=/usr/bin/python3 -I $APP/panel/socksd.py
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+RuntimeDirectory=vpnsocks
+RuntimeDirectoryMode=0755
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+[Install]
+WantedBy=multi-user.target
+EOT
+}
 vaydns_files(){
 install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
 rm -f "$VAYDNS_DIR/redirect.nft"
+socks_files
 dnsfront_files
 cat > /etc/systemd/system/vaydns.service <<EOT
 [Unit]
@@ -477,8 +521,10 @@ echo "VayDNS installed. Set the tunnel domain in Settings > Components, then add
 }
 uninstall_vaydns(){
 echo "Removing VayDNS"
-systemctl disable --now vaydns >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/vaydns.service "$VAYDNS_ENV" "$VAYDNS_INFO"
+systemctl disable --now vaydns vpnsocks >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/vaydns.service /etc/systemd/system/vpnsocks.service "$VAYDNS_ENV" "$VAYDNS_INFO" "$SOCKS_USERS"
+id "$SOCKS_USER" >/dev/null 2>&1 && userdel "$SOCKS_USER" >/dev/null 2>&1 || true
+getent group "$SOCKS_USER" >/dev/null 2>&1 && groupdel "$SOCKS_USER" >/dev/null 2>&1 || true
 nft delete table inet isile_vaydns >/dev/null 2>&1 || true
 if [ ! -d "$SLOWDNS_DIR" ]; then
 nft delete table inet isile_dns >/dev/null 2>&1 || true

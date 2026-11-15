@@ -187,11 +187,11 @@ if [ "$PDACT" = 1 ]; then kv "Ports" "80 (no TLS) | 443 (TLS, the panel too)"; e
 if [ -n "$d" ]; then kv "SSH SSL" "direct SSH on 80 (no TLS) and 443 (TLS via stunnel)"; else kv "SSH SSL" "direct SSH on 80 (no TLS)"; fi
 kv "Paths" "/vless /vmess /trojan (WS), *-grpc, *-xhttp"
 kv "" "any other path = SSH WebSocket"
-if [ -f /etc/systemd/system/vaydns.service ]; then kv "VayDNS" "UDP 53 | tunnel domain: ${VDOM:-not set (set it in the panel)}"; fi
+if [ -f /etc/systemd/system/vaydns.service ]; then kv "VayDNS" "UDP 53 | tunnel domain: ${VDOM:-not set (set it in the panel)}"; kv "" "VayDNS Direct: SOCKS5 behind the tunnel (127.0.0.1:10054, local only)"; fi
 if [ -f /etc/systemd/system/slowdns.service ]; then kv "SlowDNS" "UDP 53 | tunnel domain: ${SDOM:-not set (set it in the panel)}"; fi
 echo
 printf '  %sServices%s\n' "$c_b" "$c_rs"
-svcs="vpnpanel vpnmux nginx vpnbridge xray udp-custom vaydns slowdns"
+svcs="vpnpanel vpnmux nginx vpnbridge xray udp-custom vaydns vpnsocks slowdns"
 [ -z "$d" ] || svcs="$svcs vpnstunnel"
 for s in $svcs; do
 if [ -f "/etc/systemd/system/$s.service" ] || [ "$s" = nginx ]; then
@@ -455,7 +455,7 @@ fi
 declare -A INST STT ACC
 CK=(wsbridge udpcustom vaydns slowdns xray)
 declare -A CN=([wsbridge]="SSH WebSocket" [udpcustom]="UDP Custom" [vaydns]="VayDNS" [slowdns]="SlowDNS" [xray]="Xray")
-declare -A CD=([wsbridge]="SSH over a WebSocket bridge" [udpcustom]="SSH over UDP, third-party closed-source binary" [vaydns]="SSH and V2Ray through a DNS tunnel, open source" [slowdns]="SSH through a DNS tunnel for SlowDNS apps" [xray]="Runs VLESS, VMess and Trojan")
+declare -A CD=([wsbridge]="SSH over a WebSocket bridge" [udpcustom]="SSH over UDP, third-party closed-source binary" [vaydns]="SSH, V2Ray and direct SOCKS5 through a DNS tunnel, open source" [slowdns]="SSH through a DNS tunnel for SlowDNS apps" [xray]="Runs VLESS, VMess and Trojan")
 comp_state(){
 local k i s a
 INST=(); STT=(); ACC=()
@@ -677,8 +677,8 @@ pd="$(dbget panel_domain)"
 pp="$(dbget port_panel)"
 local names
 names="$(dbq "SELECT name FROM accounts WHERE proto='ssh'")"
-systemctl disable --now vpnpanel vpnbridge vpnmux vpnstunnel xray udp-custom vpn-udpgw vaydns slowdns >/dev/null 2>&1
-rm -f /etc/systemd/system/vaydns.service /etc/systemd/system/slowdns.service /etc/systemd/system/vpnpanel.service /etc/systemd/system/vpnbridge.service /etc/systemd/system/vpnmux.service /etc/systemd/system/vpnstunnel.service /etc/systemd/system/xray.service /etc/systemd/system/udp-custom.service /etc/systemd/system/vpn-udpgw.service /etc/vpnpanel/udpgw.nft
+systemctl disable --now vpnpanel vpnbridge vpnmux vpnstunnel xray udp-custom vpn-udpgw vaydns vpnsocks slowdns >/dev/null 2>&1
+rm -f /etc/systemd/system/vaydns.service /etc/systemd/system/vpnsocks.service /etc/systemd/system/slowdns.service /etc/systemd/system/vpnpanel.service /etc/systemd/system/vpnbridge.service /etc/systemd/system/vpnmux.service /etc/systemd/system/vpnstunnel.service /etc/systemd/system/xray.service /etc/systemd/system/udp-custom.service /etc/systemd/system/vpn-udpgw.service /etc/vpnpanel/udpgw.nft
 systemctl daemon-reload
 if [ -d /usr/local/lib/isile/udp-custom ]; then
 up="$(grep -oE '"listen"[^,]*' /usr/local/lib/isile/udp-custom/config.json 2>/dev/null | grep -oE '[0-9]{1,5}' | tail -1)"
@@ -699,9 +699,11 @@ userdel udpc >/dev/null 2>&1
 userdel udpgw >/dev/null 2>&1
 userdel vaydns >/dev/null 2>&1
 userdel slowdns >/dev/null 2>&1
+userdel vpnsocks >/dev/null 2>&1
 groupdel udpc >/dev/null 2>&1
 groupdel vaydns >/dev/null 2>&1
 groupdel slowdns >/dev/null 2>&1
+groupdel vpnsocks >/dev/null 2>&1
 nft delete table inet vpnacct >/dev/null 2>&1
 for n in $names; do
 uid="$(id -u "$n" 2>/dev/null)"

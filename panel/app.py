@@ -24,7 +24,7 @@ BANNER_MAX=2000
 DEFAULT_BANNER="<font color=\"#00FF00\">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nisile: The server has been contacted ᐠ( ᐢ ᵕ ᐢ )ᐟ\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</font>"
 DECOY_RE=re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&:@+-]*)?$")
 DECOY_MAX=300
-LOGS={"install":("file",LOGF),"audit":("file",AUDIT),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"slowdns":("unit",["slowdns"])}
+LOGS={"install":("file",LOGF),"audit":("file",AUDIT),"panel":("unit",["vpnpanel"]),"xray":("unit",["xray"]),"ssh":("unit",["ssh","sshd"]),"bridge":("unit",["vpnbridge"]),"mux":("unit",["vpnmux"]),"stunnel":("unit",["vpnstunnel"]),"nginx":("unit",["nginx"]),"nginx_err":("file","/var/log/nginx/error.log"),"nginx_acc":("file","/var/log/nginx/access.log"),"udpcustom":("unit",["udp-custom"]),"vaydns":("unit",["vaydns"]),"socks":("unit",["vpnsocks"]),"slowdns":("unit",["slowdns"])}
 XCONF="/usr/local/etc/xray/config.json"
 XBIN="/usr/local/bin/xray"
 XAPI="127.0.0.1:10085"
@@ -32,7 +32,7 @@ UID0=20000
 UID1=60000
 GB=1073741824
 V2=("vless","vmess","trojan")
-PROTOS=("ssh",)+V2
+PROTOS=("ssh",)+V2+("socks",)
 MODES=("tls","plain")
 TRANSPORTS=("ws","ssl","direct","udp","grpc","xhttp","dns","slowdns")
 V2NETS=("ws","grpc","xhttp")
@@ -50,6 +50,11 @@ VAYDNS_INFO="/etc/vpnpanel/vaydns.info"
 VAYDNS_PORT=53
 VAYDNS_UDP=5300
 VAYDNS_LOCAL=7000
+SOCKS_UNIT="vpnsocks"
+SOCKS_USERS="/etc/vpnpanel/socks-users.json"
+SOCKS_STATS="/run/vpnsocks/stats.json"
+SOCKS_GROUP="vpnsocks"
+SOCKS_KEY="socksdns:plain"
 SLOWDNS_DIR="/usr/local/lib/isile/slowdns"
 SLOWDNS_BIN=SLOWDNS_DIR+"/vaydns-server"
 SLOWDNS_PUB=SLOWDNS_DIR+"/server.pub"
@@ -58,7 +63,7 @@ SLOWDNS_INFO="/etc/vpnpanel/slowdns.info"
 SLOWDNS_UDP=5301
 SLOWDNS_LOCAL=7001
 DNS_ZONES="/etc/vpnpanel/dnszones"
-COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshdirect","plain","sshdirect"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("sshslowdns","plain","slowdns"))
+COMBOS=(("sshws","tls","wsbridge"),("sshws","plain","wsbridge"),("sshssl","tls","sshssl"),("sshdirect","plain","sshdirect"),("sshudp","udp","udpcustom"),("vless","tls","xray"),("vless","plain","xray"),("vmess","tls","xray"),("vmess","plain","xray"),("trojan","tls","xray"),("trojan","plain","xray"),("sshdns","plain","vaydns"),("vlessdns","tls","vaydns"),("vlessdns","plain","vaydns"),("vmessdns","tls","vaydns"),("vmessdns","plain","vaydns"),("trojandns","tls","vaydns"),("trojandns","plain","vaydns"),("socksdns","plain","vaydns"),("sshslowdns","plain","slowdns"))
 COMBO_REQ={"vlessdns":"xray","vmessdns":"xray","trojandns":"xray"}
 COMP_UNIT={"wsbridge":"vpnbridge","sshssl":"vpnmux","sshdirect":"ssh","udpcustom":"udp-custom","xray":"xray","vaydns":"vaydns","slowdns":"slowdns"}
 REMOVABLE=("wsbridge","udpcustom","xray","vaydns","slowdns")
@@ -468,6 +473,84 @@ def slowdns_sync(off=None):
     if not comp_installed("slowdns"):
         return
     dns_unit_sync("slowdns",slowdns_env_write(),slowdns_domain(),off)
+def socks_wanted(off=None):
+    """The SOCKS5 server runs while VayDNS is installed with a tunnel domain and the VayDNS Direct combination is on."""
+    off=combos_off() if off is None else off
+    return comp_installed("vaydns") and bool(vaydns_domain()) and SOCKS_KEY not in off
+def socks_users_write(c,off=None):
+    """Publishes the active VayDNS Direct accounts for the SOCKS5 server (it drops the connections of any account that disappears)."""
+    if not unit_exists(SOCKS_UNIT):
+        return
+    users={}
+    if socks_wanted(off):
+        for r in c.execute("SELECT name,secret FROM accounts WHERE proto='socks' AND status='active' ORDER BY name"):
+            users[r["name"]]=r["secret"]
+    txt=json.dumps({"users":users},sort_keys=True)+"\n"
+    try:
+        try:
+            with open(SOCKS_USERS) as f:
+                if f.read()==txt:
+                    return
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(SOCKS_USERS),exist_ok=True)
+        tmp=SOCKS_USERS+".tmp"
+        fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o640)
+        with os.fdopen(fd,"w") as f:
+            f.write(txt)
+        os.chmod(tmp,0o640)
+        try:
+            shutil.chown(tmp,"root",SOCKS_GROUP)
+        except (LookupError,OSError):
+            os.chmod(tmp,0o600)
+            print("socks: group %s is missing, run the VayDNS refresh"%SOCKS_GROUP,file=sys.stderr)
+        os.replace(tmp,SOCKS_USERS)
+    except OSError:
+        traceback.print_exc()
+def socks_sync(c,off=None,unit=False):
+    if not unit_exists(SOCKS_UNIT):
+        return
+    socks_users_write(c,off)
+    if not unit:
+        return
+    if socks_wanted(off):
+        if not svc_active(SOCKS_UNIT):
+            sh(["systemctl","enable","--now",SOCKS_UNIT])
+    else:
+        sh(["systemctl","disable","--now",SOCKS_UNIT])
+SOCKS_LAST={"boot":None,"v":{},"loaded":False}
+def harvest_socks():
+    """Usage of the VayDNS Direct accounts: the SOCKS5 server publishes running totals, the delta since the last look is returned."""
+    out={}
+    if not unit_exists(SOCKS_UNIT):
+        return out
+    if not SOCKS_LAST["loaded"]:
+        SOCKS_LAST["loaded"]=True
+        try:
+            j=json.loads(get("socks_base","{}") or "{}")
+            SOCKS_LAST["boot"]=j.get("boot")
+            SOCKS_LAST["v"]={str(k):[int(x[0]),int(x[1])] for k,x in j.get("v",{}).items()}
+        except (ValueError,TypeError,AttributeError,IndexError):
+            pass
+    try:
+        with open(SOCKS_STATS) as f:
+            j=json.load(f)
+        boot=str(j["boot"])
+        cur={str(k):(int(v[0]),int(v[1])) for k,v in j.get("u",{}).items()}
+    except (OSError,ValueError,KeyError,TypeError,IndexError,AttributeError):
+        return out
+    last=SOCKS_LAST["v"] if SOCKS_LAST["boot"]==boot else {}
+    for n,(u,d) in cur.items():
+        lu,ld=last.get(n,(0,0))
+        du=u-lu if u>=lu else u
+        dd=d-ld if d>=ld else d
+        if du>0 or dd>0:
+            out[n]=(du,dd)
+    if out or SOCKS_LAST["boot"]!=boot:
+        SOCKS_LAST["boot"]=boot
+        SOCKS_LAST["v"]={n:list(v) for n,v in cur.items()}
+        put("socks_base",json.dumps({"boot":boot,"v":SOCKS_LAST["v"]}))
+    return out
 def combo_info(off=None):
     off=combos_off() if off is None else off
     t=tls_on()
@@ -488,6 +571,8 @@ def combo_info(off=None):
         out.append({"k":k,"p":p,"m":m,"c":c,"enabled":k not in off,"installed":inst[c],"avail":not why,"why":why})
     return out
 def acct_keys(proto,transport,tls):
+    if proto=="socks":
+        return [SOCKS_KEY]
     if proto=="ssh":
         if transport=="udp":
             return ["sshudp:udp"]
@@ -525,6 +610,8 @@ def expected_units():
         u.append("udp-custom")
     if comp_on("vaydns") and vaydns_domain():
         u.append("vaydns")
+        if unit_exists(SOCKS_UNIT) and socks_wanted():
+            u.append(SOCKS_UNIT)
     if comp_on("slowdns") and slowdns_domain():
         u.append("slowdns")
     try:
@@ -671,6 +758,9 @@ def collect(c):
     with LOCK:
         x=harvest_xray()
         for n,(u,d) in harvest_udp().items():
+            o=x.get(n,(0,0))
+            x[n]=(o[0]+u,o[1]+d)
+        for n,(u,d) in harvest_socks().items():
             o=x.get(n,(0,0))
             x[n]=(o[0]+u,o[1]+d)
         s=harvest_nft()
@@ -895,6 +985,7 @@ def reconcile(c):
                 ssh_lock(r["name"],new!="active")
         c.commit()
         xray_sync(c)
+        socks_sync(c)
 def apply_components(c):
     with LOCK:
         off=combos_off()
@@ -910,6 +1001,7 @@ def apply_components(c):
         dns_zones_write(off)
         vaydns_sync(off)
         slowdns_sync(off)
+        socks_sync(c,off,True)
         if comp_installed("xray"):
             if comp_enabled("xray",off):
                 sh(["systemctl","enable","xray"])
@@ -1562,6 +1654,8 @@ def stats():
     sv["panel"]="ok"
     sv["udp-custom"]=block_state("udpcustom",off)
     sv["vaydns"]=block_state("vaydns",off)
+    if unit_exists(SOCKS_UNIT):
+        sv[SOCKS_UNIT]=("ok" if svc_active(SOCKS_UNIT) else "warn") if socks_wanted(off) else "off"
     sv["slowdns"]=block_state("slowdns",off)
     with open("/proc/uptime") as f:
         up=float(f.read().split()[0])
@@ -1763,6 +1857,9 @@ def log_sources():
                 out.append({"id":k,"kind":"unit"})
         elif k in ("udpcustom","vaydns","slowdns"):
             if comp_installed(k):
+                out.append({"id":k,"kind":"unit"})
+        elif k=="socks":
+            if unit_exists(SOCKS_UNIT):
                 out.append({"id":k,"kind":"unit"})
         else:
             out.append({"id":k,"kind":"unit"})
@@ -2007,7 +2104,7 @@ def latest_version():
 @app.post("/api/system/restart")
 @auth
 def sys_restart():
-    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom"),("vaydns","vaydns"),("slowdns","slowdns")) if comp_on(c) and (c!="vaydns" or vaydns_domain()) and (c!="slowdns" or slowdns_domain())]+["nginx","vpnmux"]
+    us=[u for c,u in (("xray","xray"),("wsbridge","vpnbridge"),("udpcustom","udp-custom"),("vaydns","vaydns"),("slowdns","slowdns")) if comp_on(c) and (c!="vaydns" or vaydns_domain()) and (c!="slowdns" or slowdns_domain())]+(["vpnsocks"] if unit_exists(SOCKS_UNIT) and socks_wanted() else [])+["nginx","vpnmux"]
     audit("system-restart")
     e=start_job("restart","sleep 1; systemctl restart %s; if [ -s /etc/vpnpanel/stunnel.conf ]; then systemctl restart vpnstunnel; fi; systemctl restart vpnpanel"%" ".join(us))
     if e:
@@ -2053,6 +2150,7 @@ def do_reset():
             apply_banner(DEFAULT_BANNER)
             nft_apply(c)
             xray_sync(c)
+            socks_sync(c)
         except Exception as e:
             traceback.print_exc()
             return str(e)[-300:] or "error"
@@ -2294,6 +2392,11 @@ def info(name):
             items.insert(0,{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
         if t_on and r["tls"] in ("tls","both"):
             items.insert(0,{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
+    elif p=="socks":
+        items=dns_head()
+        items.append({"k":"socks_addr","value":"127.0.0.1:%d@%s:%s"%(VAYDNS_LOCAL,n,s),"rows":2})
+        items.append({"k":"socks_uri","value":"socks5h://%s:%s@127.0.0.1:%d"%(h,quote(s,safe=""),VAYDNS_LOCAL),"rows":2})
+        items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     else:
         dns=r["transport"]=="dns"
         if dns:
@@ -2384,13 +2487,15 @@ def create():
     transport=d.get("transport","ws")
     if transport not in TRANSPORTS:
         return err("bad_values")
-    if proto!="ssh" and transport=="slowdns":
+    if proto=="socks":
+        transport="dns"
+    elif proto!="ssh" and transport=="slowdns":
         return err("bad_values")
-    if proto!="ssh":
+    elif proto!="ssh":
         transport=transport if transport in ("grpc","xhttp","dns") else "ws"
     elif transport in ("grpc","xhttp"):
         return err("bad_values")
-    if transport in ("udp","direct") or (proto=="ssh" and transport in ("dns","slowdns")):
+    if proto=="socks" or transport in ("udp","direct") or (proto=="ssh" and transport in ("dns","slowdns")):
         tls="plain"
     elif transport=="ssl":
         tls="tls"
@@ -2431,6 +2536,8 @@ def create():
             if proto=="ssh":
                 collect(c)
                 nft_apply(c)
+            elif proto=="socks":
+                socks_sync(c)
             else:
                 xray_sync(c)
         finally:
@@ -2475,12 +2582,14 @@ def edit(name):
                     return err("bad_values")
                 sets["tls"]=d["tls"]
             if d.get("transport"):
-                okt=V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","direct","udp","dns","slowdns")
+                okt=("dns",) if r["proto"]=="socks" else V2NETS+("dns",) if r["proto"]!="ssh" else ("ws","ssl","direct","udp","dns","slowdns")
                 if d["transport"] not in okt:
                     return err("bad_values")
                 sets["transport"]=d["transport"]
             ntr=sets.get("transport",r["transport"])
-            if r["proto"]=="ssh" and ntr in ("udp","direct","dns","slowdns"):
+            if r["proto"]=="socks":
+                sets["tls"]="plain"
+            elif r["proto"]=="ssh" and ntr in ("udp","direct","dns","slowdns"):
                 sets["tls"]="plain"
             elif r["proto"]=="ssh" and ntr=="ssl":
                 sets["tls"]="tls"
@@ -2528,6 +2637,8 @@ def delete(name):
             audit("account-delete",name)
             if r["proto"]=="ssh":
                 nft_apply(c)
+            elif r["proto"]=="socks":
+                socks_sync(c)
             else:
                 xray_sync(c)
         finally:
