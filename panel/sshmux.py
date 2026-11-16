@@ -7,7 +7,6 @@ WEB_TLS=int(os.environ.get("MUX_WEB_TLS","10443"))
 WEB_PLAIN_H2=int(os.environ.get("MUX_WEB_PLAIN_H2","10081"))
 WEB_TLS_H2=int(os.environ.get("MUX_WEB_TLS_H2","10442"))
 DNS_PORT=int(os.environ.get("MUX_DNS_PORT","10053"))
-SOCKS_PORT=int(os.environ.get("MUX_SOCKS_PORT","10054"))
 DNS_TLS_FRONT=int(os.environ.get("MUX_DNS_TLS_FRONT","443"))
 DNS_UDP=int(os.environ.get("MUX_DNS_UDP","5302"))
 DNS_ZONES=os.environ.get("MUX_DNS_ZONES","/etc/vpnpanel/dnszones")
@@ -77,16 +76,11 @@ def proxy_header(ip,sport,dport):
     if ":" in ip:
         return ("PROXY TCP6 %s ::1 %d %d\r\n"%(ip,sport,dport)).encode()
     return ("PROXY TCP4 %s 127.0.0.1 %d %d\r\n"%(ip,sport,dport)).encode()
-def socks_hello(buf):
-    """True once buf holds a complete SOCKS5 greeting (VER=5, NMETHODS, METHODS...), which is shorter than the 4 bytes sniffed otherwise."""
-    return len(buf)>=2 and buf[0]==5 and len(buf)>=2+buf[1]
-async def sniff(cr,wait=None,socks=False):
+async def sniff(cr,wait=None):
     buf=b""
     loop=asyncio.get_running_loop()
     end=loop.time()+(SNIFF if wait is None else wait)
     while len(buf)<4:
-        if socks and socks_hello(buf):
-            return buf,False
         rem=end-loop.time()
         if rem<=0:
             return buf,True
@@ -146,7 +140,7 @@ async def handle(cr,cw,tls,dns=False):
         else:
             pn=cw.get_extra_info("peername") or ("-",0)
             ip,sport=norm(pn[0]),int(pn[1])
-        buf,timed=await sniff(cr,None,dns)
+        buf,timed=await sniff(cr,None)
         if not buf and not timed:
             return
         if timed and not buf and not dns and not SILENT_SSH:
@@ -176,9 +170,6 @@ async def handle(cr,cw,tls,dns=False):
                 counted=True
                 t0=time.time()
             sr,sw=await asyncio.open_connection("127.0.0.1",SSH_PORT)
-            sw.write(buf)
-        elif dns and buf[:1]==b"\x05":
-            sr,sw=await asyncio.open_connection("127.0.0.1",SOCKS_PORT)
             sw.write(buf)
         elif dns and buf[:2]==b"\x16\x03":
             sr,sw=await asyncio.open_connection("127.0.0.1",DNS_TLS_FRONT)

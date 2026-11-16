@@ -386,45 +386,14 @@ chmod 644 "$DNSFRONT_NFT"
 # the redirect rewrites the destination port before the firewall sees it, so the front port must be open
 if command -v ufw >/dev/null 2>&1; then ufw allow "$DNSFRONT_UDP/udp" >/dev/null 2>&1 || true; fi
 }
-# VayDNS Direct: a SOCKS5 server (socksd.py) on 127.0.0.1:$SOCKS_PORT. The multiplexer sends it the tunnel connections that start with
-# the SOCKS5 greeting. It is local only and needs the username and password of a "VayDNS Direct" account; the panel writes the
-# active accounts to $SOCKS_USERS and reads the traffic back from /run/vpnsocks/stats.json.
+# Legacy cleanup (1.9.5): the VayDNS Direct SOCKS5 server was removed. Older installs may still have its service, user and files.
 socks_files(){
-getent group "$SOCKS_USER" >/dev/null || groupadd -r "$SOCKS_USER"
-id "$SOCKS_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin -g "$SOCKS_USER" "$SOCKS_USER"
-install -d -m755 /etc/vpnpanel
-if [ -f "$SOCKS_USERS" ]; then chown "root:$SOCKS_USER" "$SOCKS_USERS"; chmod 640 "$SOCKS_USERS"; fi
-cat > /etc/systemd/system/vpnsocks.service <<EOT
-[Unit]
-Description=VayDNS Direct SOCKS5 server (local, behind the DNS tunnel)
-After=network.target
-[Service]
-User=$SOCKS_USER
-Group=$SOCKS_USER
-Environment=SOCKS_PORT=$SOCKS_PORT
-Environment=SOCKS_USERS=$SOCKS_USERS
-ExecStart=/usr/bin/python3 -I $APP/panel/socksd.py
-Restart=always
-RestartSec=3
-LimitNOFILE=65535
-RuntimeDirectory=vpnsocks
-RuntimeDirectoryMode=0755
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-LockPersonality=true
-SystemCallArchitectures=native
-CapabilityBoundingSet=
-[Install]
-WantedBy=multi-user.target
-EOT
+systemctl disable --now vpnsocks >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/vpnsocks.service "$SOCKS_USERS"
+rm -rf /run/vpnsocks
+id "$SOCKS_USER" >/dev/null 2>&1 && userdel "$SOCKS_USER" >/dev/null 2>&1 || true
+getent group "$SOCKS_USER" >/dev/null 2>&1 && groupdel "$SOCKS_USER" >/dev/null 2>&1 || true
+return 0
 }
 vaydns_files(){
 install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
