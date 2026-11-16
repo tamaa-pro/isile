@@ -398,6 +398,7 @@ return 0
 vaydns_files(){
 install -d -m755 /usr/local/lib/isile "$VAYDNS_DIR" /etc/vpnpanel
 rm -f "$VAYDNS_DIR/redirect.nft"
+if [ -f "$VAYDNS_ENV" ] && ! grep -q '^VAYDNS_RTYPE=' "$VAYDNS_ENV"; then echo "VAYDNS_RTYPE=txt" >> "$VAYDNS_ENV"; fi
 socks_files
 dnsfront_files
 cat > /etc/systemd/system/vaydns.service <<EOT
@@ -411,7 +412,7 @@ Group=$VAYDNS_USER
 EnvironmentFile=$VAYDNS_ENV
 ExecStartPre=-+/usr/sbin/nft delete table inet isile_vaydns
 ExecStartPre=-+/usr/sbin/nft -f $DNSFRONT_NFT
-ExecStart=$VAYDNS_DIR/vaydns-server -udp :$VAYDNS_UDP -privkey-file $VAYDNS_DIR/server.key -domain \${VAYDNS_DOMAIN} -upstream 127.0.0.1:$VAYDNS_UPSTREAM
+ExecStart=$VAYDNS_DIR/vaydns-server -udp :$VAYDNS_UDP -privkey-file $VAYDNS_DIR/server.key -record-type \${VAYDNS_RTYPE} -domain \${VAYDNS_DOMAIN} -upstream 127.0.0.1:$VAYDNS_UPSTREAM
 ExecStopPost=-+/bin/sh -c "systemctl is-active --quiet slowdns || /usr/sbin/nft delete table inet isile_dns"
 Restart=always
 RestartSec=3

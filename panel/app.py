@@ -388,8 +388,8 @@ def vaydns_pub():
     return dns_pub(VAYDNS_PUB)
 def slowdns_pub():
     return dns_pub(SLOWDNS_PUB)
-# Client-side options shown to users (the server answers whatever record type the client sends; these only shape the
-# generated client command / Isile link). Transport = how the CLIENT reaches a DNS resolver: udp, dot (TCP 853) or doh (HTTPS).
+# Client-side options shown to users. The record type must match the server: vaydns-server answers only its configured
+# -record-type (see vaydns_env_write), so changing it here restarts the server with the same value. Transport = how the CLIENT reaches a DNS resolver: udp, dot (TCP 853) or doh (HTTPS).
 VAYDNS_TRANSPORTS=("udp","dot","doh")
 VAYDNS_RTYPES=("txt","null","cname","mx","ns","srv","caa","a","aaaa")
 RES_HOST_RE=re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]{2,45}\])(?::(\d{1,5}))?$")
@@ -433,10 +433,10 @@ def vaydns_info():
     return dns_info(VAYDNS_INFO)
 def slowdns_info():
     return dns_info(SLOWDNS_INFO)
-def dns_env_write(path,var,d):
+def dns_env_write(path,var,d,extra=""):
     try:
         if d:
-            txt="%s=%s\n"%(var,d)
+            txt="%s=%s\n"%(var,d)+extra
             try:
                 with open(path) as f:
                     if f.read()==txt:
@@ -457,7 +457,9 @@ def dns_env_write(path,var,d):
         traceback.print_exc()
     return False
 def vaydns_env_write():
-    return dns_env_write(VAYDNS_ENV,"VAYDNS_DOMAIN",vaydns_domain())
+    # The server ONLY answers queries whose QTYPE equals its own -record-type (default txt) and replies NXDOMAIN to
+    # anything else, so the record type chosen for the clients must also be passed to vaydns-server.
+    return dns_env_write(VAYDNS_ENV,"VAYDNS_DOMAIN",vaydns_domain(),"VAYDNS_RTYPE=%s\n"%(vaydns_client()[2] or "txt"))
 def slowdns_env_write():
     return dns_env_write(SLOWDNS_ENV,"SLOWDNS_DOMAIN",slowdns_domain())
 def dns_zones_write(off=None):
