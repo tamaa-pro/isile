@@ -1,0 +1,189 @@
+# CloudForge generic Android build workflow (auto-installed, do not edit by hand)
+# Signing key is ALWAYS read from repo secrets so updates install over older builds.
+# Builds ONLY zips that were added OR updated by the pushed commit(s) under projects/ (never everything at once).
+# Output: <zip name>.apk, signed, uploaded as a plain (non-zipped) artifact, as a release asset, and copied next to the zip.
+# Optional per-project setup: a file named `azro` (bash script) at the zip root is run before the build (extra tools, libraries, env setup). No azro = normal build.
+# Loop guard: the APK commit touches no .zip, is pushed with GITHUB_TOKEN (which never triggers workflows) and carries [skip ci].
+name: CloudForge Build
+run-name: "${{ github.event.inputs.zip && format('CloudForge: rebuild {0}', github.event.inputs.zip) || github.event.head_commit.message }}"
+on:
+  push:
+    paths: ['projects/**']
+  workflow_dispatch:
+    inputs:
+      zip: { description: 'projects/<name>/<name>.zip to rebuild (empty = zips changed by the last commit)', required: false }
+permissions:
+  contents: write
+concurrency:
+  group: cloudforge-${{ github.sha }}   # per commit: a newer upload must never replace a queued build of an older one
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect new zips
+    runs-on: ubuntu-latest
+    outputs:
+      zips: ${{ steps.d.outputs.zips }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: d
+        env:
+          ZIP_IN: ${{ github.event.inputs.zip }}
+        run: |
+          B="${{ github.event.before }}"
+          F=""
+          if [ -n "$ZIP_IN" ]; then
+            F="$ZIP_IN"   # manual rebuild of one zip, requested from the app
+          elif [ -z "$B" ] || [ "$B" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$B^{commit}" 2>/dev/null; then
+            F=$(git diff-tree --no-commit-id --name-only --diff-filter=AM -r "${{ github.sha }}" -- 'projects/*.zip')
+          else
+            F=$(git diff --name-only --diff-filter=AM "$B" "${{ github.sha }}" -- 'projects/*.zip')
+          fi
+          case "$(git log -1 --format=%s "${{ github.sha }}")" in "CloudForge: build "*) [ -z "$ZIP_IN" ] && F="";; esac   # never rebuild because of our own APK commit
+          echo "Added/updated zips:"; echo "$F"
+          echo "zips=$(echo "$F" | sed '/^$/d' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.zips != '[]' && needs.detect.outputs.zips != ''
+    name: Build ${{ matrix.zip }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        zip: ${{ fromJson(needs.detect.outputs.zips) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KS_PASS_S: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KS_ALIAS_S: ${{ secrets.ANDROID_KEY_ALIAS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ matrix.zip }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check signing secrets
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS_S" ] || [ -z "$KS_ALIAS_S" ]; then
+            echo "::error::Signing secrets missing (ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS). Open CloudForge once: it creates the persistent key automatically."
+            exit 1
+          fi
+
+      - name: Unzip project
+        run: |
+          mkdir -p _src && unzip -q "${{ matrix.zip }}" -d _src
+          # tolerate a single wrapper folder
+          if [ "$(ls -A _src | wc -l)" = "1" ] && [ -d "_src/$(ls _src)" ]; then
+            d="_src/$(ls _src)"; mv "$d"/* "$d"/.[!.]* _src/ 2>/dev/null || true; rmdir "$d" 2>/dev/null || true
+          fi
+          ls -la _src
+          echo "FLUTTER=$([ -f _src/pubspec.yaml ] && echo true || echo false)" >> "$GITHUB_ENV"
+          # plain Gradle project without a wrapper (no gradlew, not Node-based): install Gradle ourselves
+          if [ -z "$(find _src -name gradlew -not -path '*/node_modules/*' | head -1)" ] && [ ! -f _src/pubspec.yaml ] && [ ! -f _src/package.json ]; then
+            echo "NEED_GRADLE=true" >> "$GITHUB_ENV"
+          fi
+          echo "NAME=$(basename "${{ matrix.zip }}" .zip)" >> "$GITHUB_ENV"
+          # first thing we look for: the optional `azro` setup script at the project root
+          if [ -f _src/azro ]; then
+            echo "azro found: custom environment setup will run before the build"
+            echo "HAS_AZRO=true" >> "$GITHUB_ENV"
+          else
+            echo "No azro file: building normally"
+            echo "HAS_AZRO=false" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: subosito/flutter-action@v2
+        if: env.FLUTTER == 'true'
+        with: { channel: stable }
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: env.NEED_GRADLE == 'true'
+        with: { gradle-version: '8.9' }
+
+      - uses: actions/setup-go@v5
+        if: env.HAS_AZRO == 'true'
+        with: { go-version: stable }
+
+      - name: Run azro (project setup script)
+        if: env.HAS_AZRO == 'true'
+        working-directory: _src
+        run: |
+          sed -i 's/\r$//' azro            # tolerate Windows line endings
+          echo "::group::azro"; cat azro; echo "::endgroup::"
+          bash -e azro || { echo "::error::azro (the project setup script) failed, see the log above"; exit 1; }
+
+      - name: Build release
+        working-directory: _src
+        run: |
+          if [ "$FLUTTER" = "true" ]; then
+            flutter build apk --release
+          else
+            if [ -f package.json ]; then
+              if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+              if grep -q '"expo"' package.json && [ ! -d android ]; then npx expo prebuild --platform android --no-install; fi
+              npm run build --if-present
+              if ls capacitor.config.* >/dev/null 2>&1; then
+                [ -d android ] || npx cap add android
+                npx cap sync android
+              fi
+            fi
+            G=$(find . -name gradlew -not -path '*/node_modules/*' | head -1)
+            if [ -n "$G" ]; then
+              cd "$(dirname "$G")"; chmod +x gradlew
+              ./gradlew assembleRelease --no-daemon --stacktrace
+            else
+              # no wrapper: use the Gradle installed above, from the folder that holds settings.gradle(.kts)
+              S=$(find . -maxdepth 3 \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/node_modules/*' | head -1)
+              if [ -z "$S" ]; then echo "::error::No Android project found (no gradlew and no settings.gradle). Put the project files at the zip root."; exit 1; fi
+              cd "$(dirname "$S")"
+              gradle assembleRelease --no-daemon --stacktrace
+            fi
+          fi
+
+      - name: Sign APK (persistent key from repo secrets)
+        run: |
+          APK=$(find _src -path '*outputs*' -name '*.apk' | grep -i release | head -1)
+          if [ -z "$APK" ]; then echo "::error::No release APK was produced"; exit 1; fi
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/ks.p12"
+          "$BT/zipalign" -f -p 4 "$APK" "$RUNNER_TEMP/a.apk"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/ks.p12" --ks-type PKCS12 --ks-pass env:KS_PASS_S --key-pass env:KS_PASS_S \
+            --ks-key-alias "$KS_ALIAS_S" --out "$NAME.apk" "$RUNNER_TEMP/a.apk"
+          "$BT/apksigner" verify --print-certs "$NAME.apk" | head -3
+          rm -f "$RUNNER_TEMP/ks.p12"
+
+      - name: Publish release
+        run: |
+          gh release create "cf-${{ github.run_id }}-${{ strategy.job-index }}" "$NAME.apk" \
+            --title "$NAME" --target "${{ github.sha }}" \
+            --notes "source: ${{ matrix.zip }}
+          build: #${{ github.run_number }}"
+
+      - name: Upload APK artifact (plain file, no zip)
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ env.NAME }}.apk
+          archive: false
+
+      - name: Copy APK next to the project zip
+        run: |
+          D=$(dirname "${{ matrix.zip }}")
+          cp "$NAME.apk" "$D/$NAME.apk"
+          git config user.name "CloudForge"; git config user.email "cloudforge@users.noreply.github.com"
+          git add --sparse -f "$D/$NAME.apk"
+          if git diff --cached --quiet; then echo "APK unchanged"; exit 0; fi
+          git commit -q -m "CloudForge: build $D/$NAME.apk [skip ci]"
+          for i in 1 2 3 4 5 6; do
+            if git fetch -q --depth=20 origin "${{ github.ref_name }}" && git rebase -q FETCH_HEAD && git push -q origin "HEAD:${{ github.ref_name }}"; then exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((RANDOM % 8 + 3))
+          done
+          echo "::error::Could not push the APK next to the zip"; exit 1
