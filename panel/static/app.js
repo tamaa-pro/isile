@@ -20,6 +20,7 @@ const upt=s=>{const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floo
 const rnd=n=>{const c='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=new Uint32Array(n);crypto.getRandomValues(a);return Array.from(a,x=>c[x%c.length]).join('')};
 const toast=m=>{const x=el('div',{class:'toast',popover:'manual'},m);document.body.append(x);try{x.showPopover()}catch(e){}setTimeout(()=>x.remove(),3500)};
 const terr=e=>{if(e.message==='unauthorized')return;const k='e_'+e.message;const m=tx(k);toast(m!==k?m+(e.detail?': '+e.detail:''):(e.detail||e.message))};
+let ADV_DNS=false;
 const field=(l,i,h)=>el('label',{class:'f'},el('span',{},l),i,h?el('small',{class:'muted'},h):null);
 const kv=(l,v,x)=>el('div',{class:'kv'},el('span',{},l),x?el('div',{class:'kv-v'},x,el('b',{class:'ltr'},v)):el('b',{class:'ltr'},v));
 const SI={active:'circle-check',disabled:'ban',expired:'circle-xmark',limit:'triangle-exclamation'};
@@ -341,15 +342,15 @@ if(r.host)o.push(row('Domain',r.host));
 if(it.page)o.push(row('Account Page',it.page));
 const R=[];
 const hp=v=>{const m=/^(.*):(\d+)@([^:]*):([\s\S]*)$/.exec(v||'');return m?{h:m[1],p:m[2],u:m[3],s:m[4]}:null};
-const addr=(title,k,extra)=>{const a=hp(it[k]);if(!a)return;R.push([title,[row('Host',a.h),row('Port',a.p),row('User',a.u),row('Pass',a.s),...(extra||[]).map(x=>row(x[0],x[1])),row('Format',it[k])]])};
+const addr=(title,k,extra,ak)=>{const a=hp(it[k]);if(!a)return;R.push([title,[row('Host',a.h),row('Port',a.p),row('User',a.u),row('Pass',a.s),...(extra||[]).map(x=>row(x[0],x[1])),row('Format',it[k]),...(ak&&it[ak]?[row('Isile',it[ak])]:[])]])};
 const tr=r.transport,sni=it.sni?[['SNI',it.sni]]:[];
 if(!v2){
-if(tr==='ws'){addr('SSH WebSocket · HTTPS (TLS-443)','ssh_tls');addr('SSH WebSocket · HTTP (NoTLS-80)','ssh_plain');if(it.payload)R.push(['WebSocket Payload',[row('Payload',it.payload)]])}
-else if(tr==='ssl')addr('SSH SSL (Stunnel) · HTTPS (TLS-443)','ssl_tls',sni);
-else if(tr==='direct')addr('SSH Direct · OpenSSH','direct_addr',r.server_ip&&r.server_ip!==r.host?[['Alt Host',r.server_ip]]:[]);
+if(tr==='ws'){addr('SSH WebSocket · HTTPS (TLS-443)','ssh_tls',null,'app_link_tls');addr('SSH WebSocket · HTTP (NoTLS-80)','ssh_plain',null,'app_link_plain');if(it.payload)R.push(['WebSocket Payload',[row('Payload',it.payload)]])}
+else if(tr==='ssl')addr('SSH SSL (Stunnel) · HTTPS (TLS-443)','ssl_tls',sni,'app_link');
+else if(tr==='direct')addr('SSH Direct · OpenSSH','direct_addr',r.server_ip&&r.server_ip!==r.host?[['Alt Host',r.server_ip]]:[],'app_link');
 else if(tr==='udp')addr('UDP Custom','udp_addr',it.udp_port?[['UDP Port',it.udp_port]]:[]);
 else{const nm=tr==='slowdns'?'SlowDNS':'VayDNS';
-R.push([nm+' (DNS Tunnel)',[row('NS',it.dns_domain||'-'),row('PubKey',it.dns_pubkey||'-'),row('Client',it[tr==='slowdns'?'sdns_cmd':'dns_cmd']||'-'),...(tr!=='slowdns'&&it.dns_isile?[row('Isile',it.dns_isile)]:[])]]);
+R.push([nm+' (DNS Tunnel)',[row('NS',it.dns_domain||'-'),row('PubKey',it.dns_pubkey||'-'),row('Client',it[tr==='slowdns'?'sdns_cmd':'dns_cmd']||'-'),...(it.app_link?[row('Isile',it.app_link)]:[])]]);
 addr('SSH over '+nm,tr==='slowdns'?'sdns_ssh':'dns_ssh',sni)}
 }else{
 const net=tr==='dns'?'VayDNS':tr==='grpc'?'gRPC':tr==='xhttp'?'XHTTP':'WebSocket';
@@ -359,6 +360,7 @@ if(tr==='dns'&&(it.dns_domain||it.dns_pubkey))R.push(['VayDNS (DNS Tunnel)',[row
 }
 o.push(bar,(v2?up:'SSH')+' ROUTES ('+R.length+(R.length===1?' VARIANT)':' VARIANTS)'),bar);
 R.forEach(([ti,ls],i)=>{if(i)o.push('');o.push('['+(i+1)+'] '+ti,...ls)});
+if(it.sub_link)o.push('','[SUB] Subscription',row('Link',it.sub_link));
 o.push(bar);
 return o.join('\n')
 };
@@ -406,6 +408,7 @@ const genName=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),oncli
 const genSec=el('button',{type:'button',class:'icon-btn',title:t('f_gen'),onclick:()=>{secret.value=(st.kind==='v2'&&st.proto!=='trojan')?crypto.randomUUID():rnd(14)}},ic('dice'));
 let CB=null;
 try{const r=await api('GET','/api/components');CB={};r.combos.forEach(x=>{CB[x.k]=x})}catch(e){}
+const subF=typeof subField==='function'?await subField(a):null;
 const av=k=>!CB||!!(CB[k]&&CB[k].avail);
 const V2P=['vless','vmess','trojan'];
 const baseOf=(kind,proto,tr)=>kind==='v2'?(tr==='dns'?proto+'dns':proto):(tr==='ssl'?'sshssl':tr==='direct'?'sshdirect':tr==='udp'?'sshudp':tr==='dns'?'sshdns':tr==='slowdns'?'sshslowdns':'sshws');
@@ -457,6 +460,7 @@ cProto.set(!v2||ed);cTransport.set(v2);cNet.set(!v2);netSeg.upd(netOpts(),st.net
 cUnav.set(!(CB&&((!ed&&kindOpts().some(o=>o.dis))||(v2&&protoOpts().some(o=>o.dis))||(v2&&netOpts().some(o=>o.dis))||(!v2&&trOpts().some(o=>o.dis))||(!(forced||udp)&&tlsOpts().some(o=>o.dis)))));
 tlsHintTxt.textContent=t(v2&&st.net==='dns'?'f_tls_hint_dns':'f_tls_hint');
 cConn.set(v2);connHint.textContent=t('f_conn_limit_ssh');
+if(subF)subF.set(!isUdp()&&!(v2&&st.net==='dns'));
 secLabel.textContent=(v2&&st.proto!=='trojan')?t('f_uuid'):t('f_password')
 }
 const form=el('div',{class:'form'},
@@ -467,6 +471,7 @@ el('div',{class:'f'},el('span',{},t('f_days')),expF.el,dchips([7,30,90,365,0],ex
 el('div',{class:'f'},el('span',{},t('f_quota')),quota,chips([5,10,50,100,0],quota)),
 cConn,
 el('div',{class:'f'},el('span',{},t('f_public')),el('div',{class:'kv'},el('span',{},t('f_public_on')),pubSw),el('small',{class:'muted'},t('f_public_hint'))),
+subF?subF.el:null,
 field(t('f_note'),note));
 sync();
 const d=modal(ed?t('a_edit_t',a.name):t('a_new'),form,[
@@ -477,8 +482,8 @@ if(!ed&&CB&&!selKeys().every(av)){toast(t('e_combo_disabled'));return}
 const b={secret:secret.value,quota_gb:quota.value,conn_limit:st.kind==='ssh'?connLim.value:0,note:note.value,public:pub,tls:st.tls,transport:st.kind==='v2'?st.net:st.transport};
 if(!ed||(x.d?x.d.getTime():0)!==(org?org.getTime():0))b.expires=x.d?Math.floor(U(x.d)/1000):0;
 try{
-if(ed){await api('PATCH','/api/accounts/'+a.name,b);toast(t('done'));d.close();await loadAcc();drawRows()}
-else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/accounts',{...b,proto,name:name.value});d.close();await loadAcc();drawRows();infoDlg(r.name)}
+if(ed){await api('PATCH','/api/accounts/'+a.name,b);if(subF)await subF.save(a.name);toast(t('done'));d.close();await loadAcc();drawRows()}
+else{const proto=st.kind==='ssh'?'ssh':st.proto;const r=await api('POST','/api/accounts',{...b,proto,name:name.value});if(subF)await subF.save(r.name);d.close();await loadAcc();drawRows();infoDlg(r.name)}
 }catch(e){terr(e)}
 },'pri'),
 ed?btn(t('regen'),'rotate',async()=>{if(await patch(a.name,{regen:true},t('regen_done')))d.close()}):null,
@@ -546,17 +551,34 @@ if(b.c==='vaydns'||b.c==='slowdns'){
 if(!cm.installed)info.push(el('div',{class:'hint'},ic('circle-info'),t('dns_prereq')));
 else{
 const di=el('input',{dir:'ltr',placeholder:'t.example.com',value:cm.domain||'',autocomplete:'off'});
-let vtr=null,vrs=null,vrt=null;
+let vtr=null,vrs=null,vrt=null,vid=null,vka=null,vmt=null;
 if(b.c==='vaydns'){
 vtr=el('select',{},...[['udp','UDP'],['dot','DoT (TCP 853)'],['doh','DoH (HTTPS)']].map(([v,l])=>el('option',{value:v},l)));
 vtr.value=cm.transport||'udp';
 vrs=el('input',{dir:'ltr',placeholder:'8.8.8.8:53 / dns.google:853 / https://dns.google/dns-query',value:cm.resolver||'',autocomplete:'off'});
 vrt=el('select',{},...['',...['txt','null','cname','mx','ns','srv','caa','a','aaaa']].map(v=>el('option',{value:v},v||t('dns_rtype_def'))));
-vrt.value=cm.rtype||''}
-const sv=btn(t('save'),'floppy-disk',async()=>{try{const body={domain:di.value.trim().toLowerCase()};if(vtr){body.transport=vtr.value;body.resolver=vrs.value.trim();body.rtype=vrt.value}await api('POST','/api/'+b.c+'/config',body);toast(t('done'))}catch(e){terr(e)}await fill()},'pri');
+vrt.value=cm.rtype||'';
+const df=cm.defaults||{},num=(v,ph,mn,mx)=>el('input',{type:'number',dir:'ltr',inputmode:'numeric',min:mn,max:mx,step:1,placeholder:ph,value:v||'',autocomplete:'off'});
+vid=num(cm.idle,df.idle,2,86400);vka=num(cm.keepalive,df.keepalive,1,86399);vmt=num(cm.mtu,df.mtu,512,1452)}
+const doSave=async()=>{try{const body={domain:di.value.trim().toLowerCase()};if(vtr){body.transport=vtr.value;body.resolver=vrs.value.trim();body.rtype=vrt.value;body.idle=vid.value.trim();body.keepalive=vka.value.trim();body.mtu=vmt.value.trim()}await api('POST','/api/'+b.c+'/config',body);toast(t('done'))}catch(e){terr(e)}await fill()};
+const sv=btn(t('save'),'floppy-disk',doSave,'pri');
 if(busy)sv.disabled=true;
 info.push(field(t('dns_domain'),el('div',{class:'inp-row'},di,sv)));
-if(vtr){info.push(field(t('dns_transport'),vtr,t('dns_transport_h')));info.push(field(t('dns_resolver'),vrs,t('dns_resolver_h')));info.push(field(t('dns_rtype'),vrt,t('dns_rtype_h')))}
+if(vtr){
+const sv2=btn(t('save'),'floppy-disk',doSave,'pri');if(busy)sv2.disabled=true;
+const advBox=el('div',{class:'adv'},
+el('div',{class:'adv-g'},field(t('dns_transport'),vtr),field(t('dns_rtype'),vrt)),
+el('div',{class:'muted sm'},t('dns_transport_h')),
+field(t('dns_resolver'),vrs,t('dns_resolver_h')),
+el('div',{class:'muted sm'},t('dns_rtype_h')),
+el('div',{class:'adv-g'},field(t('dns_idle'),vid),field(t('dns_keepalive'),vka)),
+el('div',{class:'muted sm'},t('dns_timing_h')),
+field(t('dns_mtu'),vmt,t('dns_mtu_h')),
+el('div',{class:'adv-f'},sv2));
+advBox.hidden=!ADV_DNS;
+const tg=el('button',{class:'btn adv-t'+(ADV_DNS?' on':''),type:'button','aria-expanded':String(ADV_DNS)},ic('sliders'),el('span',{},t('dns_adv')),ic('chevron-down','adv-c'));
+tg.addEventListener('click',()=>{ADV_DNS=!ADV_DNS;advBox.hidden=!ADV_DNS;tg.classList.toggle('on',ADV_DNS);tg.setAttribute('aria-expanded',String(ADV_DNS))});
+info.push(tg,advBox)}
 if(!cm.domain)info.push(el('div',{class:'hint'},ic('triangle-exclamation'),t('dns_no_domain')));
 else{
 info.push(el('div',{class:'muted sm'},t('dns_portl')+': ',el('b',{class:'ltr'},cm.port+'/UDP')));
@@ -772,6 +794,7 @@ field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
 el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_reset'),'eraser',resetMonth)))),
 panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('div',{class:'f'},el('span',{},t('pg_token')),seg([{v:'name',l:t('pg_tok_name'),i:'user'},{v:'token',l:t('pg_tok_rand'),i:'key'}],s.public_token?'token':'name',async v=>{try{await api('POST','/api/settings',{public_token:v==='token'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('small',{class:'muted'},t('pg_token_hint'))))),
+typeof apiCard==='function'?apiCard():null,
 panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),el('div',{class:'kv'},el('span',{},t('bn_on')),bnSw),bnBox,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn({banner:bn.value,banner_on:bnOn}),'pri'),btn(t('bn_reset'),'rotate-left',async()=>{bn.value=s.banner_default||'';await saveBn({banner:bn.value,banner_on:bnOn})})))),
 panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
 panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},

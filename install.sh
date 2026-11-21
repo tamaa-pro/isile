@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
+# 1.9.7: stop package tools from drawing on the terminal while the progress screen is shown
+# (needrestart's dialog, apt-listchanges, debconf and ucf prompts used to scribble over it)
+export NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none UCF_FORCE_CONFFOLD=1
 REPO="${VPNPANEL_REPO:-tamaa-pro/isile}"
 BRANCH="${VPNPANEL_BRANCH:-}"
 STABLE_BRANCH=latest-stable-version
@@ -51,9 +54,9 @@ elif [ -n "$n" ]; then printf 'v%s' "$n"; fi
 banner_s(){
 local t="$1" r="$2" col="${3:-$c_c}" pad
 pad=$((W-12-${#t}-${#r}-2)); [ "$pad" -lt 1 ] && pad=1
-printf ' %s%s%s%s\n' "$col" "$g_tl" "$(rep "$g_h" "$W")" "$g_tr$c_rs"
-printf ' %s%s%s  %sisile%s  %s%s%s  %s%s%s%*s%s%s%s  %s%s%s\n' "$col" "$g_v" "$c_rs" "$c_bc" "$c_rs" "$c_d" "$g_arr" "$c_rs" "$c_b" "$t" "$c_rs" "$pad" "" "$c_d" "$r" "$c_rs" "$col" "$g_v" "$c_rs"
-printf ' %s%s%s%s%s\n' "$col" "$g_bl" "$(rep "$g_h" "$W")" "$g_br" "$c_rs"
+printf ' %s%s%s%s\e[K\n' "$col" "$g_tl" "$(rep "$g_h" "$W")" "$g_tr$c_rs"
+printf ' %s%s%s  %sisile%s  %s%s%s  %s%s%s%*s%s%s%s  %s%s%s\e[K\n' "$col" "$g_v" "$c_rs" "$c_bc" "$c_rs" "$c_d" "$g_arr" "$c_rs" "$c_b" "$t" "$c_rs" "$pad" "" "$c_d" "$r" "$c_rs" "$col" "$g_v" "$c_rs"
+printf ' %s%s%s%s%s\e[K\n' "$col" "$g_bl" "$(rep "$g_h" "$W")" "$g_br" "$c_rs"
 }
 ui_mode_title(){ if [ "$MODE" = update ]; then echo Updating; else echo Installing; fi; }
 ui_init(){
@@ -71,7 +74,7 @@ if [ "$UI" = 1 ]; then
 else echo "$1"; fi
 }
 ui_stop(){
-if [ -n "$TICK" ]; then kill "$TICK" 2>/dev/null || true; wait "$TICK" 2>/dev/null || true; TICK=""; fi
+if [ -n "$TICK" ]; then kill "$TICK" 2>/dev/null || true; wait "$TICK" 2>/dev/null || true; TICK=""; printf '\e[?7h' >&9; [ -z "${STTY_OLD:-}" ] || stty "$STTY_OLD" </dev/tty 2>/dev/null || true; fi
 }
 ui_leave(){
 ui_stop
@@ -158,9 +161,9 @@ pct=$(((ndone*100+frac)/8)); [ "$pct" -gt 100 ] && pct=100
 bw=$((W-18)); [ "$bw" -gt 40 ] && bw=40
 fill=$((pct*bw/100))
 el=$((now-BEGIN)); mm=$((el/60)); ss=$((el%60))
-buf=$'\e[H'
-buf+="$(banner_s "$(ui_mode_title)" "$RIGHT")"$'\n\n'
-buf+="  ${c_c}$(rep "$g_full" "$fill")${c_d}$(rep "$g_empty" $((bw-fill)))${c_rs}  ${c_b}$(printf '%3d' "$pct")%${c_rs}  ${c_d}$(printf '%02d:%02d' "$mm" "$ss")${c_rs}"$'\e[K\n\n'
+if [ $((f%25)) -eq 0 ]; then buf=$'\e[H\e[2J'; else buf=$'\e[H'; fi
+buf+="$(banner_s "$(ui_mode_title)" "$RIGHT")"$'\n\e[K\n'
+buf+="  ${c_c}$(rep "$g_full" "$fill")${c_d}$(rep "$g_empty" $((bw-fill)))${c_rs}  ${c_b}$(printf '%3d' "$pct")%${c_rs}  ${c_d}$(printf '%02d:%02d' "$mm" "$ss")${c_rs}"$'\e[K\n\e[K\n'
 for i in 1 2 3 4 5 6 7 8; do
 eval "s=\$S$i; k=\$K$i"
 lab="${STEPN[i]}"
@@ -172,13 +175,14 @@ skip) st="  ${c_d}${g_skip}  ${lab} (${k})${c_rs}";;
 esac
 buf+="$st"$'\e[K\n'
 done
-buf+=$'\n'"  ${c_d}This can take a few minutes. Keep this terminal open.${c_rs}"$'\e[K\n'
+buf+=$'\e[K\n'"  ${c_d}This can take a few minutes. Keep this terminal open.${c_rs}"$'\e[K\n'
 buf+="  ${c_d}Log: ${LOG}${c_rs}"$'\e[K\n'$'\e[J'
 printf '%s' "$buf"
 }
 ui_ticker(){
 trap - ERR INT TERM HUP EXIT
 set +eEu
+printf '\e[?7l'
 local f=0
 while true; do ui_draw "$f"; f=$((f+1)); sleep 0.15; done
 }
@@ -186,7 +190,11 @@ ui_progress_start(){
 [ "$UI" = 1 ] || return 0
 T0=$(printf '%(%s)T' -1); STEP_T=$T0
 ui_save
+STTY_OLD="$(stty -g </dev/tty 2>/dev/null || true)"
+[ -z "$STTY_OLD" ] || stty -echo </dev/tty 2>/dev/null || true
 exec 1>>"$LOG" 2>&1
+# children must not read the keyboard; skipped when the script itself is read from stdin (curl | bash)
+if [ -t 0 ]; then exec 0</dev/null; fi
 printf '\e[?25l' >&9
 ui_ticker >&9 &
 TICK=$!

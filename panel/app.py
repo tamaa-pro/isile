@@ -7,6 +7,7 @@ from urllib.request import urlopen,Request
 from flask import Flask,request,session,jsonify,render_template,redirect,Response,has_request_context
 from werkzeug.security import generate_password_hash,check_password_hash
 import sshconn
+import apisub
 BASE=os.path.dirname(os.path.abspath(__file__))
 APPDIR=os.path.dirname(BASE)
 DATA="/var/lib/vpnpanel"
@@ -178,6 +179,7 @@ def puts(d):
     c.executemany("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",[(k,str(v)) for k,v in d.items()])
     c.commit()
     c.close()
+    apisub.init_tables()
 def host():
     return get("domain","") or get("server_ip","")
 def tls_on():
@@ -412,6 +414,38 @@ def vaydns_client():
     if not vaydns_resolver_ok(tr,rs):
         rs=""
     return tr,rs,rt
+# VayDNS session timing: -idle-timeout and -keepalive exist on BOTH server and client and must be identical on both (keepalive < idle-timeout);
+# -mtu (max UDP payload of the server's responses) is a server-only flag. 0 = not set, the engine default applies.
+VAYDNS_IDLE_DEF=10
+VAYDNS_KEEP_DEF=2
+VAYDNS_MTU_DEF=1232
+VAYDNS_IDLE_RANGE=(2,86400)
+VAYDNS_KEEP_RANGE=(1,86399)
+VAYDNS_MTU_RANGE=(512,1452)
+def vaydns_int(v,rng):
+    """'' or 0 -> 0 (default); an int inside rng -> that int; anything else -> None."""
+    try:
+        n=int(str(v).strip() or 0)
+    except (TypeError,ValueError):
+        return None
+    if n==0:
+        return 0
+    return n if rng[0]<=n<=rng[1] else None
+def vaydns_timing_ok(idle,keep):
+    return (keep or VAYDNS_KEEP_DEF)<(idle or VAYDNS_IDLE_DEF)
+def vaydns_adv():
+    idle=vaydns_int(get("vaydns_idle",""),VAYDNS_IDLE_RANGE) or 0
+    keep=vaydns_int(get("vaydns_keepalive",""),VAYDNS_KEEP_RANGE) or 0
+    mtu=vaydns_int(get("vaydns_mtu",""),VAYDNS_MTU_RANGE) or 0
+    if not vaydns_timing_ok(idle,keep):
+        idle=keep=0
+    return idle,keep,mtu
+def vaydns_client_flags():
+    idle,keep,_=vaydns_adv()
+    return (" -idle-timeout %ds"%idle if idle else "")+(" -keepalive %ds"%keep if keep else "")
+def vaydns_server_opts():
+    idle,keep,mtu=vaydns_adv()
+    return " ".join(x for x in ("-idle-timeout %ds"%idle if idle else "","-keepalive %ds"%keep if keep else "","-mtu %d"%mtu if mtu else "") if x)
 def vaydns_client_args(ip):
     """(transport flag, resolver, record type). Without a resolver the client talks straight to this server over UDP 53."""
     tr,rs,rt=vaydns_client()
@@ -459,7 +493,7 @@ def dns_env_write(path,var,d,extra=""):
 def vaydns_env_write():
     # The server ONLY answers queries whose QTYPE equals its own -record-type (default txt) and replies NXDOMAIN to
     # anything else, so the record type chosen for the clients must also be passed to vaydns-server.
-    return dns_env_write(VAYDNS_ENV,"VAYDNS_DOMAIN",vaydns_domain(),"VAYDNS_RTYPE=%s\n"%(vaydns_client()[2] or "txt"))
+    return dns_env_write(VAYDNS_ENV,"VAYDNS_DOMAIN",vaydns_domain(),"VAYDNS_RTYPE=%s\nVAYDNS_OPTS=%s\n"%(vaydns_client()[2] or "txt",vaydns_server_opts()))
 def slowdns_env_write():
     return dns_env_write(SLOWDNS_ENV,"SLOWDNS_DOMAIN",slowdns_domain())
 def dns_zones_write(off=None):
@@ -2081,6 +2115,7 @@ def do_reset():
                 if r["proto"]=="ssh":
                     ssh_del(r["name"])
             c.execute("DELETE FROM accounts")
+            apisub.on_reset(c)
             c.execute("DELETE FROM daily")
             c.execute("DELETE FROM settings WHERE k IN ('cap_gb','cap_basis','public_page','public_token','banner','banner_on')")
             c.commit()
@@ -2169,6 +2204,8 @@ def comps_get():
                 o["server_ip"]=get("server_ip","")
                 o["info"]=vaydns_info()
                 o["transport"],o["resolver"],o["rtype"]=vaydns_client()
+                o["idle"],o["keepalive"],o["mtu"]=vaydns_adv()
+                o["defaults"]={"idle":VAYDNS_IDLE_DEF,"keepalive":VAYDNS_KEEP_DEF,"mtu":VAYDNS_MTU_DEF,"mtu_range":VAYDNS_MTU_RANGE}
             if k=="slowdns":
                 o["domain"]=slowdns_domain()
                 o["pubkey"]=slowdns_pub()
@@ -2223,6 +2260,18 @@ def vaydns_config():
         rt=str(d.get("rtype","")).strip().lower()
         if rt and rt not in VAYDNS_RTYPES:
             return err("bad_values")
+    idle=keep=mtu=None
+    if "idle" in d or "keepalive" in d:
+        idle=vaydns_int(d.get("idle",get("vaydns_idle","")),VAYDNS_IDLE_RANGE)
+        keep=vaydns_int(d.get("keepalive",get("vaydns_keepalive","")),VAYDNS_KEEP_RANGE)
+        if idle is None or keep is None:
+            return err("bad_values")
+        if not vaydns_timing_ok(idle,keep):
+            return err("bad_timing")
+    if "mtu" in d:
+        mtu=vaydns_int(d.get("mtu"),VAYDNS_MTU_RANGE)
+        if mtu is None:
+            return err("bad_mtu")
     ntr=tr if tr is not None else get("vaydns_transport","udp")
     nrs=rs if rs is not None else get("vaydns_resolver","")
     if nrs and not vaydns_resolver_ok(ntr,nrs):
@@ -2236,6 +2285,11 @@ def vaydns_config():
             put("vaydns_resolver",rs)
         if rt is not None:
             put("vaydns_rtype",rt)
+        if idle is not None:
+            put("vaydns_idle",str(idle) if idle else "")
+            put("vaydns_keepalive",str(keep) if keep else "")
+        if mtu is not None:
+            put("vaydns_mtu",str(mtu) if mtu else "")
         c=db()
         try:
             apply_components(c)
@@ -2303,8 +2357,20 @@ def dns_head():
     pub=vaydns_pub()
     ip=get("server_ip","") or host()
     fl,rs,rt=vaydns_client_args(ip)
-    cmd="vaydns-client %s %s -pubkey %s -domain %s%s -listen 127.0.0.1:%d"%(fl,rs,pub or "PUBKEY",td or "DOMAIN"," -record-type "+rt if rt else "",VAYDNS_LOCAL)
+    cmd="vaydns-client %s %s -pubkey %s -domain %s%s%s -listen 127.0.0.1:%d"%(fl,rs,pub or "PUBKEY",td or "DOMAIN"," -record-type "+rt if rt else "",vaydns_client_flags(),VAYDNS_LOCAL)
     return [{"k":"dns_domain","value":td or "-","rows":1},{"k":"dns_pubkey","value":pub or "-","rows":2},{"k":"dns_cmd","value":cmd,"rows":4}]
+def app_link(n,s,host,port,tail,q=""):
+    """Link the Isile app imports (LinkParser.fromSsh): ssh://user:pass@host:port?query#name"""
+    return "ssh://%s:%s@%s:%d%s#%s"%(quote(n,safe=""),quote(s,safe=""),host,port,"?"+q if q else "",quote(n+tail,safe=""))
+IPV4_RE=re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+def slowdns_isile(n,s):
+    """ssh://user:pass@tunnel-domain:22?dns=slowdns&resolver=SERVER_IP:53&pubkey=.. (the SlowDNS resolver must be an IPv4 address)"""
+    td=slowdns_domain()
+    pub=slowdns_pub()
+    ip=get("server_ip","") or host()
+    if not (td and pub and IPV4_RE.fullmatch(ip or "")):
+        return None
+    return app_link(n,s,td,22,"-SlowDNS","dns=slowdns&resolver=%s:%d&pubkey=%s"%(ip,VAYDNS_PORT,pub))
 def dns_isile(n,s):
     """Link the Isile app imports: ssh://user:pass@tunnel-domain:22?dns=vaydns&transport=..&resolver=..&pubkey=..&rtype=.."""
     td=vaydns_domain()
@@ -2316,7 +2382,12 @@ def dns_isile(n,s):
     q="dns=vaydns&transport=%s&resolver=%s&pubkey=%s"%(fl[1:],quote(rs,safe=""),pub)
     if rt:
         q+="&rtype="+rt
-    return "ssh://%s:%s@%s:22?%s#%s"%(quote(n,safe=""),quote(s,safe=""),td,q,quote(n+"-VayDNS",safe=""))
+    idle,keep,_=vaydns_adv()
+    if idle:
+        q+="&idle=%d"%idle
+    if keep:
+        q+="&keepalive=%d"%keep
+    return app_link(n,s,td,22,"-VayDNS",q)
 def slowdns_head():
     td=slowdns_domain()
     pub=slowdns_pub()
@@ -2347,30 +2418,39 @@ def info(name):
         items=dns_head()
         il=dns_isile(n,s)
         if il:
-            items.append({"k":"dns_isile","value":il,"rows":3})
+            items.append({"k":"app_link","value":il,"rows":3})
         items.append({"k":"dns_ssh","value":"127.0.0.1:%d@%s:%s"%(VAYDNS_LOCAL,n,s),"rows":2})
         if t_on:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="slowdns":
         items=slowdns_head()
+        il=slowdns_isile(n,s)
+        if il:
+            items.append({"k":"app_link","value":il,"rows":3})
         items.append({"k":"sdns_ssh","value":"127.0.0.1:%d@%s:%s"%(SLOWDNS_LOCAL,n,s),"rows":2})
         if t_on:
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="direct":
-        items=[{"k":"direct_addr","value":"%s:%d@%s:%s"%(dom,ssh_port(),n,s),"rows":2},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+        sp=ssh_port()
+        items=[{"k":"direct_addr","value":"%s:%d@%s:%s"%(dom,sp,n,s),"rows":2},{"k":"app_link","value":app_link(n,s,dom,sp,"-Direct"),"rows":2},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh" and r["transport"]=="ssl":
         if t_on:
             items.append({"k":"ssl_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
+            items.append({"k":"app_link","value":app_link(n,s,dom,443,"-SSL","tls=1&sni="+dom),"rows":2})
             items.append({"k":"sni","value":dom,"rows":1})
         items+=[{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
     elif p=="ssh":
         items=[{"k":"payload","value":"GET / HTTP/1.1[crlf]Host: %s[crlf]Upgrade: websocket[crlf][crlf]"%dom,"rows":3},{"k":"user","value":n,"rows":1},{"k":"pass","value":s,"rows":1}]
+        apps=[]
         if r["tls"] in ("plain","both"):
             items.insert(0,{"k":"ssh_plain","value":"%s:80@%s:%s"%(dom,n,s),"rows":2})
+            apps.append({"k":"app_link_plain","value":app_link(n,s,dom,80,"-WS-80","ws=1&host="+dom),"rows":2})
         if t_on and r["tls"] in ("tls","both"):
             items.insert(0,{"k":"ssh_tls","value":"%s:443@%s:%s"%(dom,n,s),"rows":2})
+            apps.insert(0,{"k":"app_link_tls","value":app_link(n,s,dom,443,"-WS-TLS","ws=1&host=%s&tls=1&sni=%s"%(dom,dom)),"rows":2})
+        items[len(apps):len(apps)]=apps
     else:
         dns=r["transport"]=="dns"
         if dns:
@@ -2403,6 +2483,7 @@ def info(name):
             items.append({"k":"grpc_service","value":p+"-grpc","rows":1})
         if r["transport"]=="xhttp":
             items.append({"k":"xhttp_path","value":"/"+p+"-xhttp","rows":1})
+    items+=apisub.info_items(r)
     if public_on() or r["public"]:
         items.insert(0,{"k":"page","value":page_url(r["ptoken"] if token_mode() else n),"rows":1})
     cn=CONN.get(n,{})
@@ -2601,6 +2682,7 @@ def delete(name):
             if r["proto"]=="ssh":
                 ssh_del(name)
             c.execute("DELETE FROM accounts WHERE name=?",(name,))
+            apisub.on_delete(c,name)
             c.commit()
             audit("account-delete",name)
             if r["proto"]=="ssh":
@@ -2653,9 +2735,13 @@ def public_api(name):
 @app.get("/<name>")
 def public_page(name):
     name=name.lower()
+    res=apisub.handle(name)  # API and subscription links share the /<hash> form
+    if res is not None:
+        return res
     if name in RESERVED or not public_row(name):
         return "Not found",404
     return render_template("public.html",name=name,version=VERSION,tz=panel_tz())
+apisub.setup(globals())
 def main():
     cmd=sys.argv[1] if len(sys.argv)>1 else "serve"
     init_db()
