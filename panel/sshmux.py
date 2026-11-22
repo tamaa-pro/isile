@@ -1,4 +1,4 @@
-import asyncio,ipaddress,os,socket,sys,time
+import asyncio,ipaddress,json,os,socket,sys,time
 SSH_PORT=int(os.environ.get("SSH_PORT","22"))
 PUB_PORT=int(os.environ.get("MUX_PUBLIC_PORT","80"))
 TLS_PORT=int(os.environ.get("MUX_TLS_PORT","10444"))
@@ -27,6 +27,40 @@ BAN={}
 BANN={}
 HITS={}
 CONN={}
+LIVE={}
+LIVE_DIRTY=[False]
+LIVE_FILE="/tmp/isile-conns-mux.json"
+# Table of the connections this process currently forwards to sshd: {local port of the upstream socket: [client ip, kind, start]}.
+# The panel (root) reads it through /proc/<pid>/root/tmp and matches the port with the peer port of each sshd session,
+# which is the only way to learn the real client address behind a loopback connection.
+def live_add(sw,ip,kind):
+    try:
+        p=sw.get_extra_info("sockname")[1]
+    except Exception:
+        return None
+    LIVE[p]=[ip,kind,int(time.time())]
+    LIVE_DIRTY[0]=True
+    return p
+def live_del(p):
+    if p is not None and LIVE.pop(p,None) is not None:
+        LIVE_DIRTY[0]=True
+async def live_writer():
+    last=0.0
+    while True:
+        await asyncio.sleep(0.3)
+        now=time.time()
+        if not LIVE_DIRTY[0] and now-last<5:
+            continue
+        LIVE_DIRTY[0]=False
+        last=now
+        try:
+            tmp=LIVE_FILE+".tmp"
+            fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+            with os.fdopen(fd,"w") as f:
+                json.dump({"t":now,"c":{str(k):v for k,v in LIVE.items()}},f)
+            os.replace(tmp,LIVE_FILE)
+        except Exception:
+            pass
 def norm(ip):
     ip=(ip or "").strip()
     if ip.lower().startswith("::ffff:") and "." in ip:
@@ -119,6 +153,7 @@ async def handle(cr,cw,tls,dns=False):
     ssh=False
     counted=False
     held=False
+    lp=None
     t0=time.time()
     try:
         sock=cw.get_extra_info("socket")
@@ -170,6 +205,7 @@ async def handle(cr,cw,tls,dns=False):
                 counted=True
                 t0=time.time()
             sr,sw=await asyncio.open_connection("127.0.0.1",SSH_PORT)
+            lp=live_add(sw,ip,"dns" if dns else "ssl" if tls else "direct")
             sw.write(buf)
         elif dns and buf[:2]==b"\x16\x03":
             sr,sw=await asyncio.open_connection("127.0.0.1",DNS_TLS_FRONT)
@@ -183,6 +219,7 @@ async def handle(cr,cw,tls,dns=False):
     except Exception:
         pass
     finally:
+        live_del(lp)
         for w in (cw,sw):
             try:
                 if w:
@@ -326,6 +363,7 @@ class DnsFront:
             for k in [k for k,v in self.flows.items() if now-v[1]>90]:
                 self.drop(k)
 async def main():
+    wt=asyncio.get_running_loop().create_task(live_writer())
     servers=[]
     for host in ("0.0.0.0","::"):
         try:

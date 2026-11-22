@@ -622,8 +622,26 @@ def harvest_xray():
     return out
 # ---- UDP Custom: per-account sessions (from its log) and usage (nft counters per client ip:port) ----
 import ipaddress
-UDPS={}
+UDPS={}   # src -> [user, udp-custom pid, last inbound packet, last data burst, first seen] (times are 0 until proven)
 UDPEND={}
+# udp-custom does not always log "Client disconnected" (client left the network, NAT timeout, restart), so a session that
+# stays in the log forever would be counted forever. A session is alive only while packets from its address keep arriving
+# (counted by nft); it is dropped after UDP_IDLE seconds of silence and forgotten after UDP_PURGE.
+UDP_IDLE=90
+UDP_PURGE=900
+UDP_BURST=1024
+UDP_ACT_WIN=25
+RE_UTS=re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(Z|[+-]\d\d:?\d\d)?")
+def udp_ts(l):
+    m=RE_UTS.match(l)
+    if not m:
+        return None
+    z=m.group(2) or "+0000"
+    z="+0000" if z=="Z" else z.replace(":","")
+    try:
+        return datetime.strptime(m.group(1)+z,"%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except ValueError:
+        return None
 UDPS_LOCK=threading.Lock()
 UDP_MAIN=[None]
 UDP_INIT=[False]
@@ -643,15 +661,31 @@ def udp_line(l):
         if "Client connected" in l:
             u=RE_UUSER.search(l)
             if u and RE_UNAME.fullmatch(u.group(1)):
-                UDPS[src]=(u.group(1),pid)
+                now=time.time()
+                ts=udp_ts(l)
+                fresh=ts is None or now-ts<UDP_IDLE
+                old=UDPS.get(src)
+                if old and old[0]==u.group(1) and old[1]==pid:
+                    if fresh:
+                        old[2]=max(old[2],ts or now)
+                else:
+                    # a line replayed from the journal (panel start) proves nothing: the session must show traffic first
+                    UDPS[src]=[u.group(1),pid,(ts or now) if fresh else 0.0,0.0,now]
         elif "Client disconnected" in l:
             v=UDPS.pop(src,None)
             if v:
                 UDPEND[src]=v[0]
 def udp_sessions():
+    """Every session still tracked (nft counters are kept for these)."""
     with UDPS_LOCK:
         m=UDP_MAIN[0]
         return [(s,v[0]) for s,v in UDPS.items() if m is None or not v[1] or v[1]==m]
+def udp_live():
+    """Sessions that are really alive: [(src, user, time of the last data burst)]."""
+    now=time.time()
+    with UDPS_LOCK:
+        m=UDP_MAIN[0]
+        return [(s,v[0],v[3]) for s,v in UDPS.items() if (m is None or not v[1] or v[1]==m) and now-v[2]<UDP_IDLE]
 def udp_follow():
     while True:
         try:
@@ -686,9 +720,12 @@ def harvest_udp():
             return out
         UDP_INIT[0]=True
         UDP_LAST.clear()
-    cur=dict(udp_sessions())
+    now_t=time.time()
     with UDPS_LOCK:
+        for src in [x for x,v in UDPS.items() if now_t-max(v[2],v[4])>UDP_PURGE]:
+            UDPS.pop(src,None)
         UDPEND.clear()
+    cur=dict(udp_sessions())
     r=sh(["nft","-j","-a","list","table","inet","vpnudp"])
     if r.returncode:
         UDP_INIT[0]=False
@@ -716,6 +753,13 @@ def harvest_udp():
         d=b-last if b>=last else b
         UDP_LAST[key]=b
         if d>0:
+            with UDPS_LOCK:
+                e=UDPS.get(key[0])
+                if e:
+                    if key[1]=="i":
+                        e[2]=now_t
+                    if d>=UDP_BURST:
+                        e[3]=now_t
             o=out.setdefault(u,[0,0])
             o[0 if key[1]=="i" else 1]+=d
         if key[0] not in cur:
@@ -778,6 +822,11 @@ def is_live(n,proto,status,conn):
     if proto=="ssh":
         return conn>0
     return time.time()-ACTIVE.get(n,0)<ACTIVE_TTL
+def is_flow(n,proto,live):
+    """Connected AND data moving: for SSH at least one session passed data in the last seconds (an idle session is only connected)."""
+    if not live:
+        return False
+    return CONN.get(n,{}).get("act",0)>0 if proto=="ssh" else True
 def speed_of(n):
     sp=SPEED.get(n)
     if not sp or time.time()-sp[2]>SPEED_TTL:
@@ -1045,37 +1094,114 @@ def track_traffic():
         daily_add(drx,dtx)
     except Exception:
         traceback.print_exc()
+CONN_MODES=("sessions","ips","active")
+CONN_KEY={"sessions":"sess","ips":"ips","active":"act"}
+CONN_MODE=["sessions"]
+CONN_TOTAL={"n":0,"sess":0,"ips":0,"act":0}
+def conn_merge(ss,lg):
+    """sshd sessions of one account (+ its live UDP Custom log sessions [(ip, last data burst)]) -> one session list.
+    UDP Custom that reaches sshd is already among the sshd sessions (adding the log again would count it twice);
+    when no sshd session stands behind it the log sessions are the only record."""
+    ua=[s for s in ss if s["via"]=="udp"]
+    rest=[s for s in ss if s["via"]!="udp"]
+    now=time.time()
+    if any(s["age"]>4 for s in ua):
+        ips=[]
+        for ip,_ in lg:
+            if ip not in ips:
+                ips.append(ip)
+        ips=ips[:len(ua)]
+        for i,s in enumerate(ua):
+            s["ip"]=ips[min(i,len(ips)-1)] if ips else "-"
+        out=rest+ua
+    else:
+        out=rest+[{"pid":None,"st":0,"ip":ip,"via":"udp","act":now-dt<UDP_ACT_WIN,"age":9999.0} for ip,dt in lg]
+    out.sort(key=lambda s:(s["st"],s["pid"] or 0))
+    return out
+def conn_counts(ss):
+    ips=set()
+    unk=0
+    act=0
+    by={}
+    for s in ss:
+        if s["ip"] in ("-",""):
+            unk+=1
+        else:
+            ips.add(s["ip"])
+        if s["act"]:
+            act+=1
+        by[s["via"]]=by.get(s["via"],0)+1
+    return {"sess":len(ss),"ips":len(ips)+unk,"act":act,"ip_list":sorted(ips),"unk":unk,"by":by}
+def conn_over(ss,L,mode):
+    """(number of connections in the limit's own unit, sessions to cut): the oldest L stay."""
+    es=[s for s in ss if s["pid"]]
+    if mode=="ips":
+        groups=[]
+        idx={}
+        for s in es:
+            k=s["ip"] if s["ip"] not in ("-","") else ("pid",s["pid"])
+            if k not in idx:
+                idx[k]=len(groups)
+                groups.append([])
+            groups[idx[k]].append(s)
+        return len(groups),[s for g in groups[L:] for s in g]
+    return len(es),es[L:]
 def conn_cycle():
     global CONN
-    now=time.time()
     c=db()
     try:
         rows=c.execute("SELECT name,proto,uid,status,conn_limit FROM accounts").fetchall()
+        m=c.execute("SELECT v FROM settings WHERE k='conn_mode'").fetchone()
     finally:
         c.close()
+    mode=m["v"] if m and m["v"] in CONN_MODES else "sessions"
+    CONN_MODE[0]=mode
+    key=CONN_KEY[mode]
+    srows=[r for r in rows if r["proto"]=="ssh"]
+    um={r["uid"]:r for r in srows if r["uid"] is not None}
+    scanned=sshconn.scan(um)
+    udp={}
+    for src,u,dt in udp_live():
+        udp.setdefault(u,[]).append((src.rpartition(":")[0].strip("[]"),dt))
     new={}
-    um={r["uid"]:r for r in rows if r["proto"]=="ssh" and r["uid"] is not None}
-    for uid,l in sshconn.scan(um).items():
-        r=um[uid]
+    all_ips=set()
+    tot={"sess":0,"ips":0,"act":0}
+    for r in srows:
         n=r["name"]
-        new[n]={"n":len(l),"ips":[]}
+        ss=[dict(x) for x in scanned.get(r["uid"],[])] if r["uid"] is not None else []
+        lg=udp.get(n,[])
+        if not ss and not lg:
+            continue
+        ss=conn_merge(ss,lg)
+        e=conn_counts(ss)
+        e["n"]=e[key]
+        new[n]=e
+        all_ips.update(e["ip_list"])
+        tot["sess"]+=e["sess"]
+        tot["act"]+=e["act"]
+        tot["ips"]+=e["unk"]
         L=r["conn_limit"]
-        if L and len(l)>L and r["status"]=="active":
-            SSH_OVER[n]=SSH_OVER.get(n,0)+1
-            if SSH_OVER[n]>=2:
-                for st,pid in l[L:]:
-                    sshconn.kill(pid)
+        if L and r["status"]=="active":
+            cnt,over=conn_over(ss,L,mode)
+            if cnt>L:
+                SSH_OVER[n]=SSH_OVER.get(n,0)+1
+                if SSH_OVER[n]>=2:
+                    for s in over:
+                        sshconn.kill(s["pid"])
+            else:
+                SSH_OVER.pop(n,None)
         else:
             SSH_OVER.pop(n,None)
-    names={r["name"] for r in rows if r["proto"]=="ssh"}
-    for src,u in udp_sessions():
-        if u in names:
-            e=new.setdefault(u,{"n":0,"ips":[]})
-            e["n"]+=1
-            e["ips"].append(src.rpartition(":")[0].strip("[]"))
+    tot["ips"]+=len(all_ips)
+    tot["n"]=tot[key]
     for n in [n for n in SSH_OVER if n not in new]:
         SSH_OVER.pop(n,None)
+    CONN_TOTAL.clear()
+    CONN_TOTAL.update(tot)
     CONN=new
+def conn_x(n):
+    cn=CONN.get(n,{})
+    return {"sessions":cn.get("sess",0),"ips":cn.get("ips",0),"active":cn.get("act",0)}
 def conn_worker():
     while True:
         time.sleep(1)
@@ -1637,6 +1763,8 @@ def stats():
     rx,tx=net_totals()
     o=dict(version=VERSION,cpu=cpu_pct(),core_pct=cpu_cores(),cores=os.cpu_count() or 1,load=list(os.getloadavg()),mem_total=mem.get("MemTotal",0),mem_used=mem.get("MemTotal",0)-mem.get("MemAvailable",0),disk_total=du.total,disk_used=du.used,uptime=up,net_rx=rx,net_tx=tx,ts=time.time(),services=sv,domain=get("domain",""),host=host(),tls_on=tls_on())
     o.update(month_info())
+    o["conn_total"]=dict(CONN_TOTAL)
+    o["conn_mode"]=CONN_MODE[0]
     o["ports"]=ports_info()
     o["days"]=month_days()
     return jsonify(o)
@@ -1675,7 +1803,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode(),"channel":channel_of(repo_info()[1])}
+    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode(),"conn_mode":(lambda v:v if v in CONN_MODES else "sessions")(get("conn_mode","sessions")),"channel":channel_of(repo_info()[1])}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
@@ -1719,6 +1847,10 @@ def settings_set():
         if d["sess_mode"] not in SESS_MODES:
             return err("bad_values")
         upd["sess_mode"]=d["sess_mode"]
+    if "conn_mode" in d:
+        if d["conn_mode"] not in CONN_MODES:
+            return err("bad_values")
+        upd["conn_mode"]=d["conn_mode"]
     if "public_page" in d:
         upd["public_page"]="1" if d["public_page"] else "0"
     if "public_token" in d:
@@ -2346,8 +2478,10 @@ def lst():
         o={k:r[k] for k in ("name","proto","status","manual","created","expires","quota","up","down","note","tls","transport","public")}
         cn=CONN.get(r["name"],{})
         o["conn"]=cn.get("n",0)
+        o["conn_x"]=conn_x(r["name"])
         o["conn_limit"]=r["conn_limit"]
-        o["active"]=is_live(r["name"],r["proto"],r["status"],o["conn"])
+        o["active"]=is_live(r["name"],r["proto"],r["status"],cn.get("sess",0))
+        o["flow"]=is_flow(r["name"],r["proto"],o["active"])
         o["sp_up"],o["sp_down"]=speed_of(r["name"]) if o["active"] else (0,0)
         rows.append(o)
     c.close()
@@ -2487,9 +2621,9 @@ def info(name):
     if public_on() or r["public"]:
         items.insert(0,{"k":"page","value":page_url(r["ptoken"] if token_mode() else n),"rows":1})
     cn=CONN.get(n,{})
-    act=is_live(n,r["proto"],r["status"],cn.get("n",0))
+    act=is_live(n,r["proto"],r["status"],cn.get("sess",0))
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,host=dom,server_ip=get("server_ip",""),note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
+    return jsonify(flow=is_flow(n,r["proto"],act),conn=cn.get("n",0),conn_x=conn_x(n),conn_ips=cn.get("ip_list",[]),conn_by=cn.get("by",{}),conn_mode=CONN_MODE[0],conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,host=dom,server_ip=get("server_ip",""),note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
 def parse_common(d,creating):
     try:
         out={}
@@ -2729,9 +2863,9 @@ def public_api(name):
         return err("not_found",404)
     name=r["name"]
     cn=CONN.get(name,{})
-    act=is_live(name,r["proto"],r["status"],cn.get("n",0))
+    act=is_live(name,r["proto"],r["status"],cn.get("sess",0))
     spu,spd=speed_of(name) if act else (0,0)
-    return jsonify(conn=cn.get("n",0),conn_limit=r["conn_limit"],name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()),cc=server_cc())
+    return jsonify(flow=is_flow(name,r["proto"],act),conn=cn.get("n",0),conn_limit=r["conn_limit"],name=r["name"],proto=r["proto"],transport=r["transport"],tls=r["tls"],status=r["status"],active=act,up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],sp_up=spu,sp_down=spd,now=int(time.time()),cc=server_cc())
 @app.get("/<name>")
 def public_page(name):
     name=name.lower()

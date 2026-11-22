@@ -124,7 +124,7 @@ return{el:wrap,set:d=>setCur(d),get:()=>{const v=input.value.trim();if(!v)return
 const dchips=(vals,f)=>el('div',{class:'chips'},...vals.map(n=>el('button',{type:'button',class:'chip',onclick:()=>{if(!n){f.set(null);return}const d=W(Date.now());d.setUTCSeconds(0,0);d.setUTCDate(d.getUTCDate()+n);f.set(d)}},n===0?ic('infinity'):t('d_short',n))));
 const chips=(vals,input)=>el('div',{class:'chips'},...vals.map(v=>el('button',{type:'button',class:'chip',onclick:()=>{input.value=v}},v===0?ic('infinity'):v)));
 const meter=(p,c='')=>{const i=el('i');i.style.width=Math.max(0,Math.min(100,p))+'%';return el('div',{class:'meter '+c},i)};
-const liveDot=on=>el('span',{class:'dot'+(on?' live':''),title:t(on?'live_on':'live_off')});
+const liveDot=(on,flow)=>el('span',{class:'dot'+(on?' live':''),title:t(on?(flow===false?'live_idle':'live_on'):'live_off')});
 const connPill=a=>{const L=a.conn_limit;return el('span',{class:'pill ltr '+(a.conn>0?(L&&a.conn>=L?'warn':'ok'):'off')},ic('plug'),a.conn+' / '+(L||'∞'))};
 const badge=p=>el('span',{class:'pb p-'+p},ic(PM[p].i),PM[p].n);
 const sw=(on,f)=>{const b=el('button',{type:'button',class:'sw'+(on?' on':''),role:'switch','aria-checked':String(!!on),onclick:()=>{on=!on;b.classList.toggle('on',on);b.setAttribute('aria-checked',String(on));f(on)}},el('i'));return b};
@@ -265,7 +265,7 @@ tile('network-wired','c4',t('d_net'),el('span',{class:'ltr'},'↓ '+speed(rx)),'
 portsTile(s.ports||[]));
 const trf=trafficTile(s);
 const row2=el('div',{class:'grid'},
-tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)+' · '+t('d_conn_n',A.reduce((x,a)=>x+(a.conn||0),0))),
+tile('users','c5',t('d_accounts'),A.length,t('d_active_n',act)+' · '+t('d_conn_n',s.conn_total?s.conn_total.n:A.reduce((x,a)=>x+(a.conn||0),0))),
 tile('chart-line','c7',t('d_traffic'),bytes(up+dn),'↑ '+bytes(up)+' · ↓ '+bytes(dn)),
 tile('clock','c8',t('d_uptime'),upt(s.uptime),t('d_load')+' '+s.load.map(x=>x.toFixed(2)).join(' / ')));
 const tot=Math.max(1,up+dn);
@@ -292,7 +292,7 @@ const tlsTag=tagOf(a);
 return el('tr',{},
 el('td',{},el('b',{},sti(a),a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
-el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active),a.proto==='ssh'?connPill(a):null),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
+el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active,a.flow),a.proto==='ssh'?connPill(a):null),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
 el('td',{},el('div',{class:'dtv'},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
 el('td',{},el('div',{class:'acts'},
@@ -370,8 +370,10 @@ const r=await api('GET','/api/accounts/'+n+'/info');
 const used=r.up+r.down;
 const head=el('div',{class:'info-h'},
 el('div',{class:'row'},badge(pk(r)),pill(SC[r.status],t('st_'+r.status))),
-el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active),t(r.active?'live_on':'live_off'))),
+el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active,r.flow),t(r.active?(r.flow?'live_on':'live_idle'):'live_off'))),
 r.proto==='ssh'?el('div',{class:'kv'},el('span',{},ic('plug'),t('c_conn')),el('b',{class:'ltr'},r.conn+' / '+(r.conn_limit||'∞'))):null,
+r.proto==='ssh'&&r.conn_x?el('div',{class:'muted sm ltr'},t('cm_detail',r.conn_x.sessions,r.conn_x.ips,r.conn_x.active)):null,
+r.proto==='ssh'&&r.conn_ips&&r.conn_ips.length?el('div',{class:'kv'},el('span',{},ic('network-wired'),t('c_ips')),el('b',{class:'ltr',style:'word-break:break-all'},r.conn_ips.join(' · '))):null,
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
 r.quota?meter(used/r.quota*100):null,
@@ -782,6 +784,7 @@ themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}],SPU,v=>{setSpu(v);toast(t('done'))}),t('s_speed_hint')),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
+field(t('s_conn_mode'),seg([{v:'sessions',l:t('cm_sessions'),i:'plug'},{v:'ips',l:t('cm_ips'),i:'network-wired'},{v:'active',l:t('cm_active'),i:'bolt'}],s.conn_mode||'sessions',async v=>{try{await api('POST','/api/settings',{conn_mode:v});s.conn_mode=v;toast(t('done'))}catch(e){terr(e)}}),t('s_conn_mode_hint')),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
 panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
