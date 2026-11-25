@@ -18,10 +18,19 @@
 </head>
 <body>
 <header class="top">
-<a class="brand" href="#/dashboard"><span class="logo"><i class="fa-solid fa-shield-halved"></i></span><b>isile</b><small>v{{ version }}</small></a>
-<nav id="nav"></nav>
+<button id="menuBtn" class="menu-btn" type="button" aria-controls="side" aria-expanded="false"><i class="fa-solid fa-bars"></i></button>
+<a class="brand" href="#/dashboard"><b>isile</b></a>
 <div id="tools" class="tools"></div>
 </header>
+<div id="scrim" class="scrim"></div>
+<aside id="side" class="side" aria-hidden="true">
+<div class="side-h">
+<span class="logo"><i class="fa-solid fa-shield-halved"></i></span>
+<div class="side-id"><b>isile</b><small class="ltr">v{{ version }}</small></div>
+<button id="sideX" class="icon-btn side-x" type="button"><i class="fa-solid fa-xmark"></i></button>
+</div>
+<nav id="nav" class="side-nav"></nav>
+</aside>
 <main id="view"></main>
 </body>
 </html>

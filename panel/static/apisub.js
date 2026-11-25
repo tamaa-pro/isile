@@ -63,7 +63,7 @@ const apPost=async(u,b,m='POST')=>{const s=await api(m,u,b);if(s&&s.keys)APS.sna
 /* ---------- settings card ---------- */
 function apiCard(){
 const body=el('div',{class:'form'});
-const box=panel('plug',t('ap_title'),body);
+const box=sec('plug',t('ap_title'),body);
 const draw=()=>{
 const s=APS.snap;
 if(!s){body.replaceChildren(el('div',{class:'empty'},ic('spinner','fa-spin')));return}

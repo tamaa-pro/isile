@@ -27,13 +27,8 @@ small{font-weight:400}
 a{color:inherit;text-decoration:none}
 .top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;padding:10px 22px;background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;font-size:18px}
-.brand small{color:var(--mut);font-size:12px;background:var(--card2);border:1px solid var(--line);padding:0 8px;border-radius:99px}
 .logo{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:11px;color:var(--on);background:linear-gradient(135deg,var(--pri),var(--pri2));box-shadow:0 6px 18px rgba(var(--pr),var(--gl))}
 .logo.big{width:62px;height:62px;border-radius:18px;font-size:26px;margin:0 auto}
-#nav{display:flex;gap:6px;margin-inline-start:18px;flex:1}
-.tools{display:flex;gap:6px}
-.nav-link{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:11px;border:0;background:transparent;color:var(--mut);font:inherit;cursor:pointer;transition:.18s}
-.nav-link.on{background:linear-gradient(135deg,rgba(var(--pr),.2),rgba(var(--p2r),.14));color:var(--tx);box-shadow:inset 0 0 0 1px rgba(var(--pr),.45)}
 main{max-width:1240px;margin:0 auto;padding:22px 18px 60px}
 main.enter{animation:rise .35s ease}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
@@ -174,7 +169,7 @@ dialog.cl::backdrop{animation:fadeo .17s ease forwards}
 .login h2 small{color:var(--mut);font-size:13px}
 .err{background:rgba(239,68,68,.14);color:var(--bad);border:1px solid rgba(239,68,68,.3);padding:9px 14px;border-radius:11px}
 [hidden]{display:none!important}
-@media(max-width:720px){.top{padding:8px 12px;gap:8px}.brand b,.brand small{display:none}#nav{margin-inline-start:4px}.nav-link span{display:none}.nav-link{padding:9px 12px}.two{grid-template-columns:1fr}main{padding:14px 10px 50px}.tile-v{font-size:22px}}
+@media(max-width:720px){.top{padding:8px 12px;gap:10px}.two{grid-template-columns:1fr}main{padding:14px 10px 50px}.tile-v{font-size:22px}}
 .c9{background:linear-gradient(135deg,#f97316,#fb923c)}
 .ports{display:flex;flex-direction:column;gap:6px}
 .pt{display:flex;align-items:center;gap:8px;font-size:13px}
@@ -211,7 +206,6 @@ dialog.cl::backdrop{animation:fadeo .17s ease forwards}
 .log{margin:8px 0 0;padding:12px;border-radius:11px;background:var(--inp);border:1px solid var(--line);font:12.5px/1.55 Consolas,"Courier New",monospace;white-space:pre-wrap;word-break:break-word;direction:ltr;text-align:left;max-height:300px;overflow:auto}
 .lang-fab{position:fixed;top:14px;inset-inline-end:14px;border:1px solid var(--line);background:var(--card)}
 .f .muted{font-size:12.5px;line-height:1.5}
-@media(max-width:720px){.nav-link.keep span{display:inline}}
 .dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--mut);opacity:.45;vertical-align:middle}
 .dot.live{background:var(--ok);opacity:1;animation:pulse 1.6s ease-out infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.65)}70%{box-shadow:0 0 0 10px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
@@ -260,7 +254,6 @@ input,textarea,select,td,.log,.tile-v,.tile-s,.kv b,.pt b,.li-h b,.li-r b,.pub-b
 td .pb,td .pill,td .acts,td button,.kv-v .pill{-webkit-user-select:none;user-select:none}
 /* hover only on devices that really hover (no sticky hover after a tap) */
 @media(hover:hover){
-.nav-link:not(.on):hover{background:var(--card2);color:var(--tx)}
 .tile:hover{transform:translateY(-2px);border-color:rgba(var(--pr),.55)}
 .btn:hover{transform:translateY(-1px)}
 .btn:not(.pri):not(.dgr):hover{border-color:var(--pri)}
@@ -269,10 +262,10 @@ td .pb,td .pill,td .acts,td button,.kv-v .pill{-webkit-user-select:none;user-sel
 .chip:hover{color:var(--tx);border-color:var(--pri)}
 }
 /* simple smooth press effect */
-.btn,.icon-btn,.nav-link,.chip,.seg button,.dd-b,.dd-o,.cal-d{touch-action:manipulation;transition:transform .14s ease,background-color .18s,border-color .18s,color .18s,box-shadow .18s,filter .18s,opacity .18s}
-.btn:active,.icon-btn:active,.nav-link:active,.chip:active,.seg button:active,.dd-b:active,.cal-d:active{transform:scale(.96)}
+.btn,.icon-btn,.sn,.tb,.menu-btn,.chip,.seg button,.dd-b,.dd-o,.cal-d{touch-action:manipulation;transition:transform .14s ease,background-color .18s,border-color .18s,color .18s,box-shadow .18s,filter .18s,opacity .18s}
+.btn:active,.icon-btn:active,.sn:active,.tb:active,.menu-btn:active,.chip:active,.seg button:active,.dd-b:active,.cal-d:active{transform:scale(.96)}
 .btn:active{filter:brightness(.92)}
-.icon-btn:active,.chip:active,.nav-link:active{opacity:.8}
+.icon-btn:active,.chip:active,.sn:active,.tb:active,.menu-btn:active{opacity:.8}
 .dd-o:active{background:rgba(var(--pr),.24)}
 :focus-visible{outline:2px solid rgba(var(--pr),.55);outline-offset:2px}
 button:focus:not(:focus-visible),a:focus:not(:focus-visible){outline:0}
@@ -466,3 +459,42 @@ dialog.xl .dlg-b{max-height:74vh}
 .cfg-f input,.cfg-f select,.cfg-f textarea{width:100%;min-width:0}
 .cfg-sw .kv{margin:0}
 .muted.bad{color:var(--dgr,#e5484d)}
+
+/* app shell: top bar, side menu, full-page views */
+.menu-btn,.tb{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--tx);font:inherit;cursor:pointer}
+.menu-btn{width:40px;font-size:17px}
+.tb{padding:0 14px}
+.brand b{font-size:19px;letter-spacing:.2px}
+.tools{display:flex;gap:6px;margin-inline-start:auto}
+.scrim{position:fixed;inset:0;z-index:45;background:rgba(5,8,20,.6);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);opacity:0;visibility:hidden;transition:opacity .28s ease,visibility 0s linear .28s}
+body.menu-open{overflow:hidden}
+body.menu-open .scrim{opacity:1;visibility:visible;transition-delay:0s}
+.side{position:fixed;top:0;bottom:0;inset-inline-start:0;z-index:50;width:min(292px,86vw);display:flex;flex-direction:column;background:var(--card);border-inline-end:1px solid var(--line);box-shadow:var(--shadow);transform:translateX(-104%);visibility:hidden;transition:transform .32s cubic-bezier(.22,1,.36,1),visibility 0s linear .32s}
+:root[dir=rtl] .side{transform:translateX(104%)}
+body.menu-open .side,:root[dir=rtl] body.menu-open .side{transform:none;visibility:visible;transition-delay:0s}
+.side-h{display:flex;align-items:center;gap:12px;padding:18px 16px 16px;border-bottom:1px solid var(--line)}
+.side-h .logo{width:44px;height:44px;border-radius:14px;font-size:19px;flex:none}
+.side-id{display:grid;gap:3px;justify-items:start;line-height:1.2;min-width:0;flex:1}
+.side-id b{font-size:20px}
+.side-id small{color:var(--mut);font-size:12.5px}
+.side-x{flex:none}
+.side-nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:3px;padding:12px 10px calc(12px + env(safe-area-inset-bottom,0px))}
+.sn{display:flex;align-items:center;gap:13px;width:100%;padding:11px 13px;border:0;border-radius:12px;background:transparent;color:var(--mut);font:inherit;text-align:start;cursor:pointer}
+.sn i{width:20px;text-align:center;font-size:15px;flex:none}
+.sn.on{background:linear-gradient(135deg,rgba(var(--pr),.2),rgba(var(--p2r),.14));color:var(--tx);box-shadow:inset 0 0 0 1px rgba(var(--pr),.45)}
+.sn.on i{color:var(--pri2)}
+.sn-sep{height:1px;background:var(--line);margin:8px 6px;flex:none}
+.sn-gap{flex:1 1 auto;min-height:8px}
+@media(hover:hover){
+.sn:not(.on):hover{background:var(--card2);color:var(--tx)}
+.sn.out:hover{background:rgba(239,68,68,.12);color:var(--bad)}
+.menu-btn:hover,.tb:hover{border-color:var(--pri)}
+}
+.page{max-width:980px;margin:0 auto}
+.pg-h{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.pg-h h2{font-size:22px;line-height:1.3}
+.sec{padding:26px 0 30px;border-top:1px solid var(--line)}
+.page>.sec:last-child{padding-bottom:6px}
+.sec-h{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:700;margin-bottom:18px}
+.sec-h i{width:20px;text-align:center;color:var(--pri2)}
+@media(prefers-reduced-motion:reduce){.side,.scrim{transition-duration:.01ms!important;transition-delay:0s!important}}

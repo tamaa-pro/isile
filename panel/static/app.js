@@ -155,6 +155,7 @@ setTimeout(loop,3000)
 function spark(v,cls,max){const svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox','0 0 100 32');svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('class','spark '+cls);if(v.length<2)return svg;const mx=max||Math.max(...v,1e-9);const pts=v.map((y,i)=>(i/(v.length-1)*100).toFixed(1)+','+(30-(Math.min(y,mx)/mx)*26).toFixed(1)).join(' ');const a=document.createElementNS(NS,'polygon');a.setAttribute('points','0,32 '+pts+' 100,32');a.setAttribute('class','sa');const l=document.createElementNS(NS,'polyline');l.setAttribute('points',pts);l.setAttribute('class','sl');svg.append(a,l);return svg}
 const tile=(icon,col,title,value,sub,extra)=>el('div',{class:'tile'},el('div',{class:'tile-h'},el('span',{class:'ico '+col},ic(icon)),el('span',{class:'tile-t'},title)),el('div',{class:'tile-v'},value),sub?el('div',{class:'muted tile-s'},sub):null,extra);
 const panel=(icon,title,...k)=>el('section',{class:'panel'},el('h3',{class:'panel-h'},ic(icon),title),...k);
+const sec=(icon,title,...k)=>el('section',{class:'sec'},el('h3',{class:'sec-h'},ic(icon),title),...k);
 let ACC=[],S=null,PREV=null,PAGE='dashboard',BUSY=false;
 const H={cpu:[],ram:[],rx:[],tx:[]};
 const F={q:'',p:'',s:''};
@@ -649,10 +650,10 @@ saveSm(v)},260);
 smBox.replaceChildren(el('span',{},t('sm_title')),dp,el('small',{class:'muted'},t('sm_hint')))}
 async function saveSm(v){try{await api('POST','/api/settings',{sess_mode:v});mode=v;toast(t('sm_saved'));return true}catch(e){terr(e);return false}}
 drawTf();drawSm();load();
-return panel('user-shield',t('se_title'),el('div',{class:'form'},
+return sec('user-shield',t('se_title'),el('div',{class:'form'},
 seg([{v:'24h',l:t('se_r24'),i:'clock'},{v:'7d',l:t('se_r7'),i:'calendar-week'}],rng,v=>{rng=v;load()}),
 listBox,el('div',{class:'row'},clr),tfBox,cnt,smBox))}
-async function viewSettings(){
+async function viewSettings(page){
 const s=await api('GET','/api/settings');
 const vw=document.documentElement.dataset.view==='desktop'?'desktop':'mobile';
 let totpOn=!!s.totp_on;
@@ -689,7 +690,6 @@ q.candidate?kv(t('pd_cert'),q.cert?t('dm_cert_days',q.cert.days_left)+' ('+dtd(q
 q.candidate&&q.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('pd_cf_note')):null,
 q.candidate&&!q.match&&!q.cf?el('div',{class:'hint'},ic('triangle-exclamation'),t('dm_warn',q.candidate,r.server_ip||'—')):null].filter(Boolean))};
 const verify=async(quiet)=>{try{const qs=[];if(dom.value.trim())qs.push('d='+encodeURIComponent(dom.value.trim().toLowerCase()));if(pdIn.value.trim())qs.push('p='+encodeURIComponent(pdIn.value.trim().toLowerCase()));const r=await api('GET','/api/domain'+(qs.length?'?'+qs.join('&'):''));showDom(r);if(!quiet)toast(t('dm_checked'))}catch(e){terr(e)}};
-verify(true);
 const applyDom=()=>{
 const d=dom.value.trim().toLowerCase();
 if(!d){toast(t('e_bad_domain'));return}
@@ -777,9 +777,8 @@ el('button',{class:'icon-btn',title:t('lg_download'),onclick:()=>dlLog(i.id)},ic
 el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.id,fillLogs)},ic('eraser'))))):[el('div',{class:'empty'},t('lg_none'))]),el('div',{class:'muted sm'},t('lg_unit_note')))
 }catch(e){terr(e)}
 };
-fillLogs();
-$('#view').replaceChildren(el('div',{class:'stack'},
-panel('palette',t('s_appearance'),el('div',{class:'form cols lg'},
+const SECS={
+appearance:()=>sec('palette',t('s_appearance'),el('div',{class:'form cols lg'},
 themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}],SPU,v=>{setSpu(v);toast(t('done'))}),t('s_speed_hint')),
@@ -787,26 +786,29 @@ field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'des
 field(t('s_conn_mode'),seg([{v:'sessions',l:t('cm_sessions'),i:'plug'},{v:'ips',l:t('cm_ips'),i:'network-wired'},{v:'active',l:t('cm_active'),i:'bolt'}],s.conn_mode||'sessions',async v=>{try{await api('POST','/api/settings',{conn_mode:v});s.conn_mode=v;toast(t('done'))}catch(e){terr(e)}}),t('s_conn_mode_hint')),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
-panel('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
-sessionsCard(s,v=>{totpOn=v;setCdF()}),
-panel('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))),field(t('pd_label'),pdIn,t('pd_hint')),el('div',{class:'row'},btn(t('pd_apply'),'lock',applyPd,'pri'),pdOff),field(t('pp_label'),ppIn,t('pp_hint')),el('div',{class:'row'},ppSave))),
-panel('puzzle-piece',t('cb_title'),compsBox()),
-panel('gauge-high',t('lim_title'),el('div',{class:'form cols'},
+password:()=>sec('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
+sessions:()=>sessionsCard(s,v=>{totpOn=v;setCdF()}),
+domain:()=>(verify(true),sec('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))),field(t('pd_label'),pdIn,t('pd_hint')),el('div',{class:'row'},btn(t('pd_apply'),'lock',applyPd,'pri'),pdOff),field(t('pp_label'),ppIn,t('pp_hint')),el('div',{class:'row'},ppSave)))),
+comps:()=>sec('puzzle-piece',t('cb_title'),compsBox()),
+limits:()=>sec('gauge-high',t('lim_title'),el('div',{class:'form cols'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
 field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),
 el('div',{class:'row'},btn(t('save'),'floppy-disk',saveLim,'pri'),btn(t('lim_reset'),'eraser',resetMonth)))),
-panel('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('div',{class:'f'},el('span',{},t('pg_token')),seg([{v:'name',l:t('pg_tok_name'),i:'user'},{v:'token',l:t('pg_tok_rand'),i:'key'}],s.public_token?'token':'name',async v=>{try{await api('POST','/api/settings',{public_token:v==='token'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('small',{class:'muted'},t('pg_token_hint'))))),
-typeof apiCard==='function'?apiCard():null,
-panel('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),el('div',{class:'kv'},el('span',{},t('bn_on')),bnSw),bnBox,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn({banner:bn.value,banner_on:bnOn}),'pri'),btn(t('bn_reset'),'rotate-left',async()=>{bn.value=s.banner_default||'';await saveBn({banner:bn.value,banner_on:bnOn})})))),
-panel('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox)),
-panel('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},
+pub:()=>sec('eye',t('pg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('pg_desc')),seg([{v:'on',l:t('pg_on'),i:'eye'},{v:'off',l:t('pg_off'),i:'eye-slash'}],s.public_page?'on':'off',async v=>{try{await api('POST','/api/settings',{public_page:v==='on'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('div',{class:'f'},el('span',{},t('pg_token')),seg([{v:'name',l:t('pg_tok_name'),i:'user'},{v:'token',l:t('pg_tok_rand'),i:'key'}],s.public_token?'token':'name',async v=>{try{await api('POST','/api/settings',{public_token:v==='token'});toast(t('pg_saved'))}catch(e){terr(e)}}),el('small',{class:'muted'},t('pg_token_hint'))))),
+api:()=>typeof apiCard==='function'?apiCard():null,
+banner:()=>sec('bullhorn',t('bn_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('bn_desc')),el('div',{class:'kv'},el('span',{},t('bn_on')),bnSw),bnBox,el('div',{class:'row'},btn(t('save'),'floppy-disk',()=>saveBn({banner:bn.value,banner_on:bnOn}),'pri'),btn(t('bn_reset'),'rotate-left',async()=>{bn.value=s.banner_default||'';await saveBn({banner:bn.value,banner_on:bnOn})})))),
+logs:()=>(fillLogs(),sec('file-lines',t('lg_title'),el('div',{class:'form'},el('div',{class:'muted sm'},t('lg_desc')),lgBox))),
+system:()=>sec('screwdriver-wrench',t('sys_title'),el('div',{class:'kvs cols sys lg'},
 kv(t('sys_version'),VERSION,pill('off',t(s.channel==='latest'?'ch_latest_s':'ch_stable_s'))),
 ...latestRow(),
 row('rotate-right',t('sys_restart'),t('sys_restart_desc'),btn('','power-off',()=>ask(t('sys_restart_confirm'),t('sys_restart'),()=>{runJob('/api/system/restart',null,t('sys_w_restart'))},{danger:false}))),
 row('cloud-arrow-down',t('sys_update'),t('sys_update_desc'),btn('','cloud-arrow-down',()=>askUpdate(s.channel))),
 row('broom',t('sys_reset'),t('sys_reset_desc'),btn('','broom',doReset,'dgr')),
-row('trash',t('sys_uninstall'),t('sys_uninstall_desc'),btn('','trash',doUninstall,'dgr'))))))
+row('trash',t('sys_uninstall'),t('sys_uninstall_desc'),btn('','trash',doUninstall,'dgr'))))
+};
+const PAGES={customize:['appearance','limits','pub','banner'],security:['password','sessions','domain'],protocols:['comps'],api:['api'],system:['logs','system']};
+$('#view').replaceChildren(el('div',{class:'page'},pageHead(page),...(PAGES[page]||[]).map(k=>SECS[k]())))
 }
 const RAWB='https://raw.githubusercontent.com/tamaa-pro/isile/refs/heads/',BR_STABLE='latest-stable-version',BR_LATEST='main',VRE=/^[0-9A-Za-z .+_-]{1,32}$/;
 let VERS={};
@@ -832,25 +834,44 @@ localStorage.setItem('lang',v);
 const d=document.documentElement;d.lang=v;d.dir=v==='ar'?'rtl':'ltr';LANG=v;
 shell();route()
 }
+const NAV=[['dashboard','gauge-high'],['accounts','users'],0,['customize','palette'],['security','user-shield'],['protocols','puzzle-piece'],['api','plug'],['system','gears']];
+const pageHead=p=>el('div',{class:'pg-h'},el('span',{class:'ico c1'},ic((NAV.find(x=>x&&x[0]===p)||[0,'gear'])[1])),el('h2',{},t('nav_'+p)));
 const VIEWS={
 dashboard:async()=>{await Promise.all([loadStats(),loadAcc()]);drawDash()},
 accounts:async()=>{await loadAcc();viewAccounts()},
-settings:async()=>{await viewSettings()}
+customize:()=>viewSettings('customize'),
+security:()=>viewSettings('security'),
+protocols:()=>viewSettings('protocols'),
+api:()=>viewSettings('api'),
+system:()=>viewSettings('system')
 };
+const menuBtn=$('#menuBtn'),sideEl=$('#side');
+const isMenu=()=>document.body.classList.contains('menu-open');
+const setMenu=o=>{document.body.classList.toggle('menu-open',o);menuBtn.setAttribute('aria-expanded',String(o));sideEl.setAttribute('aria-hidden',String(!o))};
+const closeMenu=()=>setMenu(false);
+menuBtn.addEventListener('click',()=>setMenu(!isMenu()));
+$('#sideX').addEventListener('click',()=>{closeMenu();menuBtn.focus()});
+$('#scrim').addEventListener('click',closeMenu);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&isMenu()){closeMenu();menuBtn.focus()}});
 function shell(){
 document.title=t('app_title');
-const link=(p,i)=>el('a',{href:'#/'+p,class:'nav-link','data-p':p,title:t('nav_'+p)},ic(i),el('span',{},t('nav_'+p)));
-$('#nav').replaceChildren(link('dashboard','gauge-high'),link('accounts','users'));
+menuBtn.title=t('menu_open');menuBtn.setAttribute('aria-label',t('menu_open'));
+$('#sideX').title=t('menu_close');$('#sideX').setAttribute('aria-label',t('menu_close'));
+$('#nav').replaceChildren(
+...NAV.map(x=>x?el('a',{href:'#/'+x[0],class:'sn','data-p':x[0],onclick:closeMenu},ic(x[1]),el('span',{},t('nav_'+x[0]))):el('div',{class:'sn-sep',role:'separator'})),
+el('div',{class:'sn-gap'}),
+el('div',{class:'sn-sep',role:'separator'}),
+el('button',{class:'sn out',type:'button',onclick:async()=>{try{await api('POST','/api/logout')}catch{}location.href='/login'}},ic('right-from-bracket'),el('span',{},t('logout'))));
 $('#tools').replaceChildren(
-el('button',{class:'nav-link keep',title:t('s_language'),onclick:()=>setLang(LANG==='ar'?'en':'ar')},ic('language'),el('span',{},t('lang_btn'))),
-link('settings','gear'),
-el('button',{class:'nav-link',title:t('logout'),onclick:async()=>{try{await api('POST','/api/logout')}catch{}location.href='/login'}},ic('right-from-bracket'),el('span',{},t('logout'))))
+el('button',{class:'tb',type:'button',title:t('s_language'),onclick:()=>setLang(LANG==='ar'?'en':'ar')},ic('language'),el('span',{},t('lang_btn'))))
 }
 async function route(){
 PAGE=location.hash.replace(/^#\//,'')||'dashboard';
 TR.el=null;
+if(PAGE==='settings')PAGE='customize';
 if(!VIEWS[PAGE])PAGE='dashboard';
-document.querySelectorAll('.nav-link').forEach(a=>a.classList.toggle('on',a.dataset.p===PAGE));
+document.querySelectorAll('.sn[data-p]').forEach(a=>{const on=a.dataset.p===PAGE;a.classList.toggle('on',on);if(on)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current')});
+closeMenu();window.scrollTo(0,0);
 const v=$('#view');
 v.replaceChildren(el('div',{class:'empty'},ic('spinner','fa-spin')));
 v.classList.remove('enter');void v.offsetWidth;v.classList.add('enter');
