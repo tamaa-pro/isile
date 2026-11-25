@@ -357,6 +357,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 .cols.lg{--cw:340px}
 .cols.xl{--cw:460px}
 .kvs.cols{gap:12px}
+.cols.one>*,.cols.one>.dc>*{flex:1 1 100%}
 .dc{display:contents}
 .cols>*,.cols>.dc>*{flex:1 1 min(var(--cw,260px),100%);min-width:0}
 .cols>.row,.cols>.muted,.cols>.empty,.cols>.hint,.cols>.full,.cols>textarea,.cols.sys>.kv{flex-basis:100%}

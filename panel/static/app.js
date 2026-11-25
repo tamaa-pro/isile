@@ -778,19 +778,19 @@ el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.
 }catch(e){terr(e)}
 };
 const SECS={
-appearance:()=>sec('palette',t('s_appearance'),el('div',{class:'form cols lg'},
+appearance:()=>sec('palette',t('s_appearance'),el('div',{class:'form cols one'},
 themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}],SPU,v=>{setSpu(v);toast(t('done'))}),t('s_speed_hint')),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
-field(t('s_conn_mode'),seg([{v:'sessions',l:t('cm_sessions'),i:'plug'},{v:'ips',l:t('cm_ips'),i:'network-wired'},{v:'active',l:t('cm_active'),i:'bolt'}],s.conn_mode||'sessions',async v=>{try{await api('POST','/api/settings',{conn_mode:v});s.conn_mode=v;toast(t('done'))}catch(e){terr(e)}}),t('s_conn_mode_hint')),
+field(t('s_conn_mode'),seg([{v:'sessions',l:t('cm_sessions'),i:'plug'},{v:'ips',l:t('cm_ips'),i:'network-wired'},{v:'active',l:t('cm_active'),i:'bolt'}],s.conn_mode||'ips',async v=>{try{await api('POST','/api/settings',{conn_mode:v});s.conn_mode=v;toast(t('done'))}catch(e){terr(e)}}),t('s_conn_mode_hint')),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
 password:()=>sec('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),
 sessions:()=>sessionsCard(s,v=>{totpOn=v;setCdF()}),
 domain:()=>(verify(true),sec('globe',t('dm_title'),el('div',{class:'form cols'},res,field(t('dm_domain'),dom),field(t('dm_email'),mail),el('div',{class:'row'},btn(t('dm_apply'),'lock',applyDom,'pri'),btn(t('dm_verify'),'shield-halved',()=>verify(false))),field(t('pd_label'),pdIn,t('pd_hint')),el('div',{class:'row'},btn(t('pd_apply'),'lock',applyPd,'pri'),pdOff),field(t('pp_label'),ppIn,t('pp_hint')),el('div',{class:'row'},ppSave)))),
 comps:()=>sec('puzzle-piece',t('cb_title'),compsBox()),
-limits:()=>sec('gauge-high',t('lim_title'),el('div',{class:'form cols'},
+limits:()=>sec('gauge-high',t('lim_title'),el('div',{class:'form cols one'},
 field(t('lim_cap'),cap,t('lim_cap_hint')),
 field(t('lim_basis'),basisDd),
 field(t('lim_used'),usedIn),

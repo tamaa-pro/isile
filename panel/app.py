@@ -1096,7 +1096,7 @@ def track_traffic():
         traceback.print_exc()
 CONN_MODES=("sessions","ips","active")
 CONN_KEY={"sessions":"sess","ips":"ips","active":"act"}
-CONN_MODE=["sessions"]
+CONN_MODE=["ips"]
 CONN_TOTAL={"n":0,"sess":0,"ips":0,"act":0}
 def conn_merge(ss,lg):
     """sshd sessions of one account (+ its live UDP Custom log sessions [(ip, last data burst)]) -> one session list.
@@ -1154,7 +1154,7 @@ def conn_cycle():
         m=c.execute("SELECT v FROM settings WHERE k='conn_mode'").fetchone()
     finally:
         c.close()
-    mode=m["v"] if m and m["v"] in CONN_MODES else "sessions"
+    mode=m["v"] if m and m["v"] in CONN_MODES else "ips"
     CONN_MODE[0]=mode
     key=CONN_KEY[mode]
     srows=[r for r in rows if r["proto"]=="ssh"]
@@ -1803,7 +1803,7 @@ def dns_of(dom):
 @auth
 def settings_get():
     s=gets("cap_gb","cap_basis")
-    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode(),"conn_mode":(lambda v:v if v in CONN_MODES else "sessions")(get("conn_mode","sessions")),"channel":channel_of(repo_info()[1])}
+    o={"domain":get("domain",""),"panel_domain":panel_domain(),"panel_domain_on":panel_domain_on(),"server_ip":get("server_ip",""),"tls_on":tls_on(),"public_page":public_on(),"public_token":token_mode(),"banner":get("banner",DEFAULT_BANNER),"banner_on":get("banner_on","1")=="1","banner_default":DEFAULT_BANNER,"decoy_on":get("decoy_on","0")=="1","decoy_url":get("decoy_url",""),"tz":panel_tz(),"tz_region":tz_region(),"tz_utc":get("tz_utc","0")=="1","tz_list":tz_list(),"totp_on":bool(totp_secret()),"sess_mode":sess_mode(),"conn_mode":(lambda v:v if v in CONN_MODES else "ips")(get("conn_mode","ips")),"channel":channel_of(repo_info()[1])}
     o.update(month_info())
     return jsonify(o)
 @app.post("/api/settings")
