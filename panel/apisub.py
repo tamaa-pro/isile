@@ -1,4 +1,4 @@
-"""isile 1.9.7: API links and subscription links.
+"""isile 1.10.2: API links and subscription links.
 
 An API link is  <panel url>/<32 hex hash>  and returns the configs picked for it as JSON (a private VPN app can poll it).
 A subscription link is  <panel url>/<32 hex hash>  per account and returns that account's configs as a base64 list of
@@ -6,12 +6,14 @@ share links (the usual subscription format of HTTP Custom, NetMod, v2rayNG...).
 
 A "config" is one account plus the client-side settings chosen in the panel (TLS, payload, remote proxy, SNI, DNS options...).
 Several configs can be made from the same account, and each one is delivered through the API, the subscription, both or none.
+1.10.2: every API link has its own delivery structure ("links": share links, "json": every setting of the config on its own) and an optional
+AES-256-GCM encryption with a key chosen by the admin (the receiving app needs the key). Subscription links are never encrypted.
 Only the values the admin changed are stored: everything else follows the panel (domain, ports, keys), so it stays correct later.
 
 This file owns the tables, the admin endpoints (/api/apicfg/...) and the public hash endpoint. app.py only calls setup(globals())
 once and a few small hooks (hash lookup, account info, account delete, reset).
 """
-import re,json,time,base64,secrets
+import re,json,time,base64,secrets,hashlib,os
 from urllib.parse import quote
 from flask import request,jsonify,Response
 
@@ -27,6 +29,8 @@ class _NS:
 HASH_RE=re.compile(r"^[0-9a-f]{32}$")
 ID_RE=re.compile(r"^[0-9a-f]{10}$")
 DELIVERY=("none","api","sub","both")
+STRUCTS=("links","json")
+ENC_KEY_RE=re.compile(r"^[\x21-\x7e]{8,128}$")  # visible ASCII only, so the key is typed the same on every device
 MISS={}  # ip -> [misses, last]: unknown hashes are throttled
 TLSV=["Auto","TLSv1.0","TLSv1.1","TLSv1.2","TLSv1.3"]
 FPS=["chrome","firefox","safari","ios","android","edge","360","qq","random","randomized",""]
@@ -43,7 +47,7 @@ PROFILE={"uid":"","name":"","kind":"SSH","host":"","port":22,"user":"","pass":""
 "network":"tcp","security":"","flow":"","pbk":"","sid":"","spx":"","alterId":0,"vmessScy":"auto","encryption":"none","serviceName":"",
 "dns":"","dnsResolver":"8.8.8.8:53","dnsPubkey":"","dnsRecord":"","dnsCompat":False,"dnsListen":"","dnsTransport":"udp","forward":"socks5","auth":False,
 "dnsIdle":"","dnsKeepalive":"","dnsUdpTimeout":"","dnsOpenStream":"","dnsWorkers":"","dnsRps":"","dnsMaxQname":"","dnsMaxLabels":"","dnsClientId":"",
-"dnsUtls":"","dnsLogLevel":"","dnsExtra":"","locked":False}
+"dnsUtls":"","dnsLogLevel":"","dnsExtra":""}
 # ---- which settings each kind of account can change (k, type, group, extra) ----
 def _f(k,t,g,**x):
     o={"k":k,"t":t,"g":g}
@@ -68,7 +72,7 @@ _f("mux","bool","net")]+[
 _f("tls","bool","tls"),_f("sni","text","tls",when={"tls":[True]}),_f("fingerprint","select","tls",opts=FPS,when={"tls":[True]}),_f("alpn","text","tls",mx=60,when={"tls":[True]}),_f("insecure","bool","tls",when={"tls":[True]})]
 FIELDS_V2_VLESS=[_f("flow","select","adv",opts=FLOWS),_f("encryption","text","adv",mx=20)]
 FIELDS_V2_VMESS=[_f("alterId","int","adv",lo=0,hi=64),_f("vmessScy","select","adv",opts=VMESS_SCY)]
-COMMON=[_f("label","text","id",mx=40),_f("locked","bool","id")]
+COMMON=[_f("label","text","id",mx=40)]
 def setup(g):
     global A
     A=_NS(g)
@@ -96,9 +100,32 @@ def init_tables():
 CREATE TABLE IF NOT EXISTS api_configs(id TEXT PRIMARY KEY,account TEXT NOT NULL,label TEXT NOT NULL DEFAULT '',delivery TEXT NOT NULL DEFAULT 'api',apis TEXT NOT NULL DEFAULT '[]',settings TEXT NOT NULL DEFAULT '{}',created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS api_configs_acc ON api_configs(account);
 CREATE TABLE IF NOT EXISTS api_subs(account TEXT PRIMARY KEY,token TEXT NOT NULL UNIQUE,enabled INTEGER NOT NULL DEFAULT 1,created INTEGER NOT NULL,hits INTEGER NOT NULL DEFAULT 0,last INTEGER NOT NULL DEFAULT 0);""")
+        # 1.10.2: per-API structure and encryption; the lock option of the configs was removed
+        cols={r[1] for r in c.execute("PRAGMA table_info(api_keys)")}
+        if "structure" not in cols:
+            c.execute("ALTER TABLE api_keys ADD COLUMN structure TEXT NOT NULL DEFAULT 'links'")
+        if "enc_on" not in cols:
+            c.execute("ALTER TABLE api_keys ADD COLUMN enc_on INTEGER NOT NULL DEFAULT 0")
+        if "enc_key" not in cols:
+            c.execute("ALTER TABLE api_keys ADD COLUMN enc_key TEXT NOT NULL DEFAULT ''")
+        for row in c.execute("SELECT id,settings FROM api_configs WHERE settings LIKE '%locked%'").fetchall():
+            try:
+                ov=json.loads(row["settings"])
+            except ValueError:
+                continue
+            if isinstance(ov,dict) and "locked" in ov:
+                ov.pop("locked",None)
+                c.execute("UPDATE api_configs SET settings=? WHERE id=?",(json.dumps(ov),row["id"]))
         c.commit()
     finally:
         c.close()
+def encrypt_payload(text,key):
+    """AES-256-GCM, the same primitive as the app's .isl files. The AES key is SHA-256(key text), the IV is random (12 bytes) and
+    'data' is base64(ciphertext + 16-byte tag), which is what javax.crypto's AES/GCM/NoPadding decrypts directly."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    iv=os.urandom(12)
+    ct=AESGCM(hashlib.sha256(key.encode()).digest()).encrypt(iv,text.encode("utf-8"),None)
+    return {"encrypted":True,"alg":"AES-256-GCM","kdf":"SHA-256","iv":base64.b64encode(iv).decode(),"data":base64.b64encode(ct).decode()}
 def api_on():
     return A.get("api_on","0")=="1"
 def sub_on():
@@ -253,7 +280,6 @@ def build_profile(r,cfg_id,label,ov):
         p["dnsTransport"]="udp"
     p["uid"]=cfg_id
     p["name"]=ov.get("label") or label or r["name"]
-    p["locked"]=bool(ov.get("locked",False))
     return p
 def _enc(s):
     return quote(str(s),safe="_-!.~'()*")
@@ -392,6 +418,7 @@ def handle(h):
     try:
         k=c.execute("SELECT * FROM api_keys WHERE token=?",(h,)).fetchone()
         if k and k["enabled"] and api_on():
+            struct="json" if k["structure"]=="json" else "links"
             rows=[]
             for row in _cfg_rows(c,"WHERE delivery IN ('api','both')"):
                 try:
@@ -404,15 +431,34 @@ def handle(h):
                 if not r or not eligible(r) or A.calc(r,now)!="active":
                     continue
                 p,l=_item(r,row)
-                rows.append({"id":row["id"],"name":p["name"],"account":r["name"],"type":type_line(p),"link":l,"profile":p,"expires":r["expires"],"quota":r["quota"],"used":r["up"]+r["down"]})
+                it={"id":row["id"],"name":p["name"],"account":r["name"],"type":type_line(p),"expires":r["expires"],"quota":r["quota"],"used":r["up"]+r["down"]}
+                if struct=="json":
+                    it["profile"]=p
+                else:
+                    it["link"]=l
+                rows.append((it,l))
             c.execute("UPDATE api_keys SET hits=hits+1,last=? WHERE id=?",(now,k["id"]))
             c.commit()
-            fmt=request.args.get("format","json")
+            fmt=request.args.get("format","")
             if fmt in ("links","raw"):
-                return Response("\n".join(x["link"] for x in rows),mimetype="text/plain")
-            if fmt=="base64":
-                return Response(base64.b64encode("\n".join(x["link"] for x in rows).encode()).decode(),mimetype="text/plain")
-            return jsonify(version=1,name=k["name"],updated=now,count=len(rows),configs=rows)
+                body,mime="\n".join(x[1] for x in rows),"text/plain"
+            elif fmt=="base64":
+                body,mime=base64.b64encode("\n".join(x[1] for x in rows).encode()).decode(),"text/plain"
+            else:
+                body,mime=json.dumps({"version":2,"structure":struct,"name":k["name"],"updated":now,"count":len(rows),"configs":[x[0] for x in rows]},ensure_ascii=False,separators=(",",":")),"application/json"
+            if k["enc_on"]:
+                # never fall back to plain text: without a usable key or the crypto module nothing is sent
+                try:
+                    if not ENC_KEY_RE.fullmatch(k["enc_key"] or ""):
+                        raise ValueError("no key")
+                    body=json.dumps(encrypt_payload(body,k["enc_key"]),separators=(",",":"))
+                except Exception as e:
+                    A.audit("api-encrypt-failed","%s: %s"%(k["name"],type(e).__name__))
+                    return Response("Encryption unavailable",503)
+                resp=Response(body,mimetype="application/json")
+                resp.headers["Cache-Control"]="no-store"
+                return resp
+            return Response(body,mimetype=mime)
         s=c.execute("SELECT * FROM api_subs WHERE token=?",(h,)).fetchone()
         if s and s["enabled"] and sub_on():
             r=_acct(c,s["account"])
@@ -476,7 +522,7 @@ def _key_json(c,k):
             ids=[]
         if not ids or k["id"] in ids:
             n+=1
-    return {"id":k["id"],"name":k["name"],"enabled":bool(k["enabled"]),"url":A.page_url(k["token"]),"created":k["created"],"last":k["last"],"hits":k["hits"],"configs":n}
+    return {"id":k["id"],"name":k["name"],"enabled":bool(k["enabled"]),"url":A.page_url(k["token"]),"created":k["created"],"last":k["last"],"hits":k["hits"],"configs":n,"structure":"json" if k["structure"]=="json" else "links","enc_on":bool(k["enc_on"]),"enc_key":k["enc_key"] or ""}
 def _cfg_json(c,row,r):
     try:
         ov=json.loads(row["settings"])
@@ -543,6 +589,22 @@ def key_edit(kid):
         k=c.execute("SELECT * FROM api_keys WHERE id=?",(kid,)).fetchone()
         if not k:
             return A.err("not_found",404)
+        if "structure" in d and d["structure"] not in STRUCTS:
+            return A.err("bad_values")
+        if "enc_key" in d:
+            ek=str(d["enc_key"] or "").strip()
+            if ek and not ENC_KEY_RE.fullmatch(ek):
+                return A.err("api_bad_enc_key")
+        else:
+            ek=k["enc_key"] or ""
+        on=bool(d["enc_on"]) if "enc_on" in d else bool(k["enc_on"])
+        if on and not ek:
+            return A.err("api_bad_enc_key")
+        if "structure" in d:
+            c.execute("UPDATE api_keys SET structure=? WHERE id=?",(d["structure"],kid))
+        if "enc_key" in d or "enc_on" in d:
+            c.execute("UPDATE api_keys SET enc_on=?,enc_key=? WHERE id=?",(1 if on else 0,ek,kid))
+            A.audit("api-key-encryption","%s on=%s"%(k["name"],on))
         if "name" in d:
             c.execute("UPDATE api_keys SET name=? WHERE id=?",(str(d["name"]).strip()[:40],kid))
         if "enabled" in d:

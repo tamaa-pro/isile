@@ -430,7 +430,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 .adv-g select,.adv-g input{width:100%;min-width:0}
 .adv-f{display:flex;justify-content:flex-end}
 
-/* API and subscription (1.9.7) */
+/* API and subscription (1.9.7, 1.10.2) */
 dialog.xl{width:min(980px,96vw)}
 dialog.xl .dlg-b{max-height:74vh}
 .ap-keys{gap:10px}
@@ -453,12 +453,20 @@ dialog.xl .dlg-b{max-height:74vh}
 .cfg-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .cfg-g{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:13px;background:var(--card2)}
 .cfg-g-h{font-weight:700;font-size:13.5px;color:var(--mut)}
-.cfg-g-b{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px 14px;align-items:start}
+/* 1.10.2: the config editor is a single column of grouped cards */
+dialog.cfg-ed{width:min(600px,96vw)}
+dialog.cfg-ed .dlg-b{max-height:72vh}
+.cfg-form{gap:12px}
+.cfg-g{gap:12px;padding:14px}
+.cfg-g-h{padding-bottom:8px;border-bottom:1px solid var(--line);color:var(--tx)}
+.cfg-g-hl{display:flex;align-items:center;justify-content:space-between}
+.cfg-g-b{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
 .cfg-f{align-content:start}
 .cfg-g-b[hidden],.cfg-f[hidden]{display:none}
-.cfg-g-b .cfg-f:has(textarea),.cfg-g-b .cfg-f:has(.hint){grid-column:1/-1}
-.cfg-f input,.cfg-f select,.cfg-f textarea{width:100%;min-width:0}
+.cfg-f input,.cfg-f select,.cfg-f textarea,.cfg-g textarea{width:100%;min-width:0}
 .cfg-sw .kv{margin:0}
+.cfg-sw{padding:2px 0}
+.ap-opts{display:grid;gap:12px;margin-top:4px;padding-top:12px;border-top:1px solid var(--line)}
 .muted.bad{color:var(--dgr,#e5484d)}
 
 /* app shell: top bar, side menu, full-page views */

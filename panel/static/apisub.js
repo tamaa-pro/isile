@@ -1,12 +1,15 @@
 'use strict';
-/* isile 1.9.7: "API and subscription" card of the settings page, the configs window, and the subscription switch of the account dialog.
+/* isile 1.10.2 (1.9.7): "API and subscription" card of the settings page, the configs window, and the subscription switch of the account dialog.
    Loaded after i18n.js and before app.js; it only uses the helpers of app.js when a function runs. Backend: apisub.py */
 Object.assign(I18N.ar,{
 ap_title:'API ورابط الاشتراك',ap_desc:'يتيح لتطبيق VPN خاص أو لأي تطبيق يدعم رابط الاشتراك جلب كونفيجات حسابات محددة بالإعدادات التي تختارها هنا، فلا تكفي بيانات الحساب وحدها (TLS وPayload وSNI وغيرها).',
 ap_on:'تفعيل API',ap_on_hint:'مغلق افتراضياً. عند التفعيل يُولَّد رابط من رابط اللوحة يتبعه هاش، ويمكن توليد أكثر من رابط.',
 ap_keys:'روابط API',ap_add:'إضافة API',ap_rename:'تسمية',ap_regen:'رابط جديد',ap_regen_confirm:'سيتوقف الرابط القديم عن العمل فوراً وتحتاج التطبيقات إلى الرابط الجديد. متابعة؟',
 ap_del:'حذف',ap_del_confirm:'حذف رابط API هذا نهائياً؟',ap_name:'اسم الرابط',ap_hits:'{0} طلب',ap_never:'لم يُستخدم بعد',ap_cfgs:'{0} كونفيج',ap_off_key:'متوقف',
-ap_secret:'الرابط سرّي: من يملكه يقرأ بيانات الحسابات المرسلة عبره. يعيد JSON، وللقائمة فقط أضف ‎?format=raw‎ إلى آخره.',
+ap_secret:'الرابط سرّي: من يملكه يقرأ بيانات الحسابات المرسلة عبره (ما لم يكن التشفير مفعّلاً). يعيد JSON، وللقائمة فقط أضف ‎?format=raw‎ إلى آخره.',
+ap_struct:'بنية البيانات المرسلة',st_links:'روابط',st_json:'JSON',ap_struct_links:'كل كونفيج يُرسل كرابط مشاركة جاهز (ssh:// وvless:// وغيرها).',ap_struct_json:'كل كونفيج يُرسل ككود JSON تظهر فيه كل معطياته على حدة (المضيف والمنفذ وTLS وSNI وغيرها).',
+ap_enc:'تشفير البيانات',ap_enc_hint:'يشفّر كل ما يخرج من هذا الرابط بخوارزمية AES-256-GCM، فلا يقرؤه إلا تطبيق يملك المفتاح. لا يؤثر على رابط الاشتراك.',ap_enc_key:'مفتاح التشفير',ap_enc_ph:'8 أحرف على الأقل (حروف وأرقام ورموز إنجليزية بلا مسافات)',ap_enc_gen:'توليد مفتاح عشوائي',ap_enc_save:'حفظ المفتاح',ap_enc_need:'يحتاج التطبيق المستلم إلى نفس المفتاح لفك التشفير. غيّر المفتاح فيتوقف فك التشفير في التطبيقات التي تحمل القديم.',
+ap_opts:'إعدادات الرابط',
 ap_ctl:'التحكم بما يُرسل',ap_ctl_hint:'اختر الحسابات والإعدادات التي تصل إلى التطبيق، ولكل كونفيج خيار الإرسال عبر API أو الاشتراك أو كليهما.',
 sb_title:'رابط الاشتراك',sb_on:'تفعيل رابط الاشتراك',sb_hint:'التفعيل هنا يفتح خيار الاشتراك في نافذة إنشاء الحساب فقط. ولا يُصدر الرابط شيئاً قبل أن تُنشأ كونفيجات لذلك الحساب وتُضبط على الإرسال عبر الاشتراك.',
 sb_count:'{0} حساب مفعّل له الاشتراك',
@@ -16,16 +19,16 @@ cd_label:'اسم الكونفيج',cd_label_hint:'الاسم الذي يظهر �
 cd_reset:'إعادة الكل للتلقائي',cd_link:'الرابط الناتج',cd_auto:'تلقائي',cd_inactive:'الحساب غير نشط فلا يُرسل',cd_no_delivery:'لا يُرسل',
 dl_none:'لا شيء',dl_api:'API',dl_sub:'اشتراك',dl_both:'الاثنان',
 g_id:'الهوية',g_conn:'الاتصال',g_ws:'WebSocket',g_payload:'Payload والبروكسي',g_tls:'TLS',g_net:'الشبكة',g_dns:'نفق DNS',g_dnsadv:'خيارات DNS المتقدمة',g_adv:'متقدم',
-cf_label:'الاسم',cf_locked:'قفل الكونفيج',cf_host:'العنوان (Host)',cf_port:'المنفذ',cf_ws:'WebSocket',cf_wsPath:'مسار WebSocket',cf_wsHost:'ترويسة Host',cf_payloadOn:'تفعيل Payload',cf_payload:'Payload',
+cf_label:'الاسم',cf_host:'العنوان (Host)',cf_port:'المنفذ',cf_ws:'WebSocket',cf_wsPath:'مسار WebSocket',cf_wsHost:'ترويسة Host',cf_payloadOn:'تفعيل Payload',cf_payload:'Payload',
 cf_proxyHost:'بروكسي بعيد (Remote Proxy)',cf_proxyPort:'منفذ البروكسي',cf_tls:'TLS',cf_sni:'SNI',cf_tlsVersion:'إصدار TLS',cf_insecure:'السماح بشهادة غير موثوقة',
 cf_dnsTransport:'نقل DNS',cf_dnsResolver:'المحلّل (Resolver)',cf_dnsRecord:'نوع السجل',cf_dnsListen:'المستمع المحلي',cf_dnsCompat:'توافق dnstt',cf_dnsIdle:'idle-timeout (ث)',cf_dnsKeepalive:'keepalive (ث)',
 cf_dnsUdpTimeout:'udp-timeout (مللي ث)',cf_dnsOpenStream:'open-stream-timeout (ث)',cf_dnsWorkers:'udp-workers',cf_dnsRps:'rps',cf_dnsMaxQname:'max-qname-len',cf_dnsMaxLabels:'max-num-labels',cf_dnsClientId:'clientid-size',
 cf_dnsUtls:'بصمة TLS (utls)',cf_dnsLogLevel:'مستوى السجل',cf_dnsExtra:'خيارات إضافية',cf_network:'الشبكة (Network)',cf_serviceName:'اسم خدمة gRPC',cf_mux:'Mux',cf_fingerprint:'بصمة TLS',cf_alpn:'ALPN',
 cf_flow:'Flow',cf_encryption:'Encryption',cf_alterId:'alterId',cf_vmessScy:'تشفير VMess',
-ch_locked:'يخفي محتوى الكونفيج داخل التطبيق ويمنع تعديله ومشاركته',ch_host:'غيّره مثلاً إلى نطاق CDN أو عنوان آخر. الفارغ = نطاق اللوحة',ch_port:'الفارغ = المنفذ الافتراضي حسب TLS',
+ch_host:'غيّره مثلاً إلى نطاق CDN أو عنوان آخر. الفارغ = نطاق اللوحة',ch_port:'الفارغ = المنفذ الافتراضي حسب TLS',
 ch_payload:'الوسوم: [host] [port] [host_port] [crlf]',ch_proxyHost:'اتركه فارغاً لعدم استعمال بروكسي',ch_sni:'الفارغ = نطاق اللوحة',ch_dnsResolver:'مثل 8.8.8.8:53 أو dns.google:853 أو https://dns.google/dns-query',
 ch_dnsListen:'مثل 7000 أو 127.0.0.1:7000، والفارغ = تلقائي',ch_mux:'يصل التطبيق عبر JSON فقط، ولا يحمله الرابط',ch_dnsExtra:'خيارات تُمرَّر للمحرك كما هي',
-e_api_bad_field:'قيمة غير صالحة',e_api_unsupported:'هذا الحساب غير مدعوم في التطبيق',e_too_many:'تم بلوغ الحد الأقصى',
+e_api_bad_field:'قيمة غير صالحة',e_api_bad_enc_key:'مفتاح التشفير: من 8 إلى 128 حرفاً إنجليزياً أو رقماً أو رمزاً بلا مسافات',e_api_unsupported:'هذا الحساب غير مدعوم في التطبيق',e_too_many:'تم بلوغ الحد الأقصى',
 sub_f:'رابط الاشتراك',sub_f_on:'تفعيل رابط الاشتراك لهذا الحساب',sub_f_hint:'لا يُصدر الرابط شيئاً حتى تُنشأ كونفيجات من هذا الحساب وتُضبط على الإرسال عبر الاشتراك.',sub_f_na:'غير متاح لـ UDP Custom وV2Ray عبر DNS',sub_f_cfgs:'{0} كونفيج عبر الاشتراك',
 l_sub_link:'رابط الاشتراك'});
 Object.assign(I18N.en,{
@@ -33,7 +36,10 @@ ap_title:'API & subscription',ap_desc:'Lets a private VPN app, or any app that s
 ap_on:'Enable API',ap_on_hint:'Off by default. When enabled, a link is generated from the panel URL followed by a hash, and you can generate more than one.',
 ap_keys:'API links',ap_add:'Add API',ap_rename:'Rename',ap_regen:'New link',ap_regen_confirm:'The old link stops working immediately and apps need the new one. Continue?',
 ap_del:'Delete',ap_del_confirm:'Delete this API link permanently?',ap_name:'Link name',ap_hits:'{0} requests',ap_never:'Never used',ap_cfgs:'{0} configs',ap_off_key:'Paused',
-ap_secret:'The link is secret: anyone who has it can read the account data sent through it. It returns JSON; add ?format=raw to get only the list of links.',
+ap_secret:'The link is secret: anyone who has it can read the account data sent through it (unless encryption is on). It returns JSON; add ?format=raw to get only the list of links.',
+ap_struct:'Structure of the data sent',st_links:'Links',st_json:'JSON',ap_struct_links:'Each config is sent as a ready share link (ssh://, vless:// and so on).',ap_struct_json:'Each config is sent as JSON code where every setting appears on its own (host, port, TLS, SNI and more).',
+ap_enc:'Encrypt the data',ap_enc_hint:'Encrypts everything this link returns with AES-256-GCM, so only an app that holds the key can read it. It does not affect the subscription link.',ap_enc_key:'Encryption key',ap_enc_ph:'At least 8 characters (English letters, digits and symbols, no spaces)',ap_enc_gen:'Generate a random key',ap_enc_save:'Save the key',ap_enc_need:'The receiving app needs the same key to decrypt. Changing the key stops decryption in apps that hold the old one.',
+ap_opts:'Link settings',
 ap_ctl:'Control what is sent',ap_ctl_hint:'Choose the accounts and settings that reach the app. Each config can be sent through the API, the subscription, both or neither.',
 sb_title:'Subscription link',sb_on:'Enable subscription link',sb_hint:'Enabling it here only unlocks the subscription switch in the create-account window. The link returns nothing until configs are made from that account and set to be sent through the subscription.',
 sb_count:'{0} accounts with subscription enabled',
@@ -43,16 +49,16 @@ cd_label:'Config name',cd_label_hint:'The name shown in the app. You can make se
 cd_reset:'Reset everything to auto',cd_link:'Resulting link',cd_auto:'auto',cd_inactive:'Account is not active, so it is not sent',cd_no_delivery:'Not sent',
 dl_none:'None',dl_api:'API',dl_sub:'Subscription',dl_both:'Both',
 g_id:'Identity',g_conn:'Connection',g_ws:'WebSocket',g_payload:'Payload & proxy',g_tls:'TLS',g_net:'Network',g_dns:'DNS tunnel',g_dnsadv:'Advanced DNS options',g_adv:'Advanced',
-cf_label:'Name',cf_locked:'Lock the config',cf_host:'Address (Host)',cf_port:'Port',cf_ws:'WebSocket',cf_wsPath:'WebSocket path',cf_wsHost:'Host header',cf_payloadOn:'Enable payload',cf_payload:'Payload',
+cf_label:'Name',cf_host:'Address (Host)',cf_port:'Port',cf_ws:'WebSocket',cf_wsPath:'WebSocket path',cf_wsHost:'Host header',cf_payloadOn:'Enable payload',cf_payload:'Payload',
 cf_proxyHost:'Remote proxy',cf_proxyPort:'Proxy port',cf_tls:'TLS',cf_sni:'SNI',cf_tlsVersion:'TLS version',cf_insecure:'Allow untrusted certificate',
 cf_dnsTransport:'DNS transport',cf_dnsResolver:'Resolver',cf_dnsRecord:'Record type',cf_dnsListen:'Local listener',cf_dnsCompat:'dnstt compatibility',cf_dnsIdle:'idle-timeout (s)',cf_dnsKeepalive:'keepalive (s)',
 cf_dnsUdpTimeout:'udp-timeout (ms)',cf_dnsOpenStream:'open-stream-timeout (s)',cf_dnsWorkers:'udp-workers',cf_dnsRps:'rps',cf_dnsMaxQname:'max-qname-len',cf_dnsMaxLabels:'max-num-labels',cf_dnsClientId:'clientid-size',
 cf_dnsUtls:'TLS fingerprint (utls)',cf_dnsLogLevel:'Log level',cf_dnsExtra:'Extra flags',cf_network:'Network',cf_serviceName:'gRPC service name',cf_mux:'Mux',cf_fingerprint:'TLS fingerprint',cf_alpn:'ALPN',
 cf_flow:'Flow',cf_encryption:'Encryption',cf_alterId:'alterId',cf_vmessScy:'VMess cipher',
-ch_locked:'Hides the config content inside the app and blocks editing and sharing',ch_host:'Change it to a CDN domain or another address, for example. Empty = the panel domain',ch_port:'Empty = the default port for the TLS setting',
+ch_host:'Change it to a CDN domain or another address, for example. Empty = the panel domain',ch_port:'Empty = the default port for the TLS setting',
 ch_payload:'Tags: [host] [port] [host_port] [crlf]',ch_proxyHost:'Leave empty for no proxy',ch_sni:'Empty = the panel domain',ch_dnsResolver:'Such as 8.8.8.8:53, dns.google:853 or https://dns.google/dns-query',
 ch_dnsListen:'Such as 7000 or 127.0.0.1:7000; empty = automatic',ch_mux:'Reaches the app through JSON only; a link cannot carry it',ch_dnsExtra:'Flags passed to the engine as they are',
-e_api_bad_field:'Invalid value',e_api_unsupported:'This account is not supported by the app',e_too_many:'Limit reached',
+e_api_bad_field:'Invalid value',e_api_bad_enc_key:'Encryption key: 8 to 128 English letters, digits or symbols, no spaces',e_api_unsupported:'This account is not supported by the app',e_too_many:'Limit reached',
 sub_f:'Subscription link',sub_f_on:'Enable the subscription link for this account',sub_f_hint:'The link returns nothing until configs are made from this account and set to be sent through the subscription.',sub_f_na:'Not available for UDP Custom and V2Ray over DNS',sub_f_cfgs:'{0} configs via subscription',
 l_sub_link:'Subscription link'});
 const APS={snap:null};
@@ -82,12 +88,30 @@ const keyRow=k=>{
 const url=el('input',{readonly:true,dir:'ltr',value:k.url});
 const en=sw(k.enabled,async v=>{try{await apPost('/api/apicfg/keys/'+k.id,{enabled:v},'PATCH');toast(t('done'))}catch(e){terr(e)}draw()});
 const rn=()=>{const inp=el('input',{maxlength:40,value:k.name,placeholder:t('ap_name')});const d=modal(t('ap_rename'),field(t('ap_name'),inp),[btn(t('save'),'floppy-disk',async()=>{try{await apPost('/api/apicfg/keys/'+k.id,{name:inp.value},'PATCH');d.close();draw()}catch(e){terr(e)}},'pri')])};
+const upd=async b=>{try{await apPost('/api/apicfg/keys/'+k.id,b,'PATCH');toast(t('done'))}catch(e){terr(e)}draw()};
+const rnd=()=>{const a=new Uint8Array(16);crypto.getRandomValues(a);return Array.from(a,x=>x.toString(16).padStart(2,'0')).join('')};
+const stSeg=seg([{v:'links',l:t('st_links'),i:'link'},{v:'json',l:t('st_json'),i:'code'}],k.structure,v=>{if(v!==k.structure)upd({structure:v})});
+const encSw=sw(k.enc_on,v=>upd(v&&!k.enc_key?{enc_on:true,enc_key:rnd()}:{enc_on:v}));
+const kin=el('input',{dir:'ltr',autocomplete:'off',spellcheck:'false',maxlength:128,value:k.enc_key,placeholder:t('ap_enc_ph')});
+const kSave=()=>{const v=kin.value.trim();if(v!==k.enc_key)upd({enc_key:v})};
+kin.addEventListener('change',kSave);
+const encBox=el('div',{class:'f'},el('span',{},t('ap_enc_key')),
+el('div',{class:'inp-row'},kin,el('button',{type:'button',class:'icon-btn',title:t('copy'),onclick:()=>copy(kin.value)},ic('copy')),
+el('button',{type:'button',class:'icon-btn',title:t('ap_enc_gen'),onclick:()=>{kin.value=rnd();kSave()}},ic('dice')),
+el('button',{type:'button',class:'icon-btn',title:t('ap_enc_save'),onclick:kSave},ic('floppy-disk'))),
+el('small',{class:'muted'},t('ap_enc_need')));
+encBox.hidden=!k.enc_on;
+const opts=el('div',{class:'ap-opts'},
+el('div',{class:'f'},el('span',{},t('ap_struct')),stSeg,el('small',{class:'muted'},t(k.structure==='json'?'ap_struct_json':'ap_struct_links'))),
+el('div',{class:'f'},el('div',{class:'kv'},el('span',{},ic('lock'),t('ap_enc')),encSw),el('small',{class:'muted'},t('ap_enc_hint'))),
+encBox);
 return el('div',{class:'ap-key'+(k.enabled?'':' off')},
 el('div',{class:'ap-key-h'},el('b',{},k.name||'API'),el('span',{class:'muted sm'},t('ap_cfgs',k.configs)+' · '+(k.hits?t('ap_hits',apNum(k.hits))+' · '+apAgo(k.last):t('ap_never'))),en),
 el('div',{class:'inp-row'},url,el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(k.url)},ic('copy')),
 el('button',{class:'icon-btn',title:t('ap_rename'),onclick:rn},ic('pen')),
 el('button',{class:'icon-btn',title:t('ap_regen'),onclick:()=>ask(t('ap_regen_confirm'),t('ap_regen'),async()=>{try{await apPost('/api/apicfg/keys/'+k.id,{regen:true},'PATCH');draw()}catch(e){terr(e);return false}},{danger:false})},ic('rotate')),
-el('button',{class:'icon-btn danger',title:t('ap_del'),onclick:()=>ask(t('ap_del_confirm'),t('ap_del'),async()=>{try{await apPost('/api/apicfg/keys/'+k.id+'/delete',{});draw()}catch(e){terr(e);return false}})},ic('trash'))))};
+el('button',{class:'icon-btn danger',title:t('ap_del'),onclick:()=>ask(t('ap_del_confirm'),t('ap_del'),async()=>{try{await apPost('/api/apicfg/keys/'+k.id+'/delete',{});draw()}catch(e){terr(e);return false}})},ic('trash'))),
+opts)};
 draw();
 api('GET','/api/apicfg').then(s=>{APS.snap=s;draw()}).catch(terr);
 return box}
@@ -156,7 +180,6 @@ inp.value=st.ov[k]!==undefined?st.ov[k]:'';
 inp.addEventListener('input',()=>{const v=inp.value.trim();if(v==='')delete st.ov[k];else st.ov[k]=v;queue()})}
 const box=el('label',{class:'f cfg-f'},el('span',{},t('cf_'+k)),inp,hint?el('small',{class:'muted'},hint):null);
 ctl[k]={box,inp,kind,f};return box};
-const lockF=F.fields.find(f=>f.k==='locked');
 const secs={};
 for(const g of GROUPS){secs[g]=el('div',{class:'cfg-g-b'})}
 secs.id.append(field(t('cd_label'),lab,t('cd_label_hint')));
@@ -192,8 +215,8 @@ const resetAll=()=>{st.ov={};for(const[k,c]of Object.entries(ctl)){if(c.f.t==='b
 const form=el('div',{class:'form cfg-form'},
 el('div',{class:'cfg-top'},el('span',{class:'pill'},F.type),el('span',{class:'muted sm ltr'},account)),
 ...GROUPS.map(grp),
-el('div',{class:'f'},el('span',{},t('cd_delivery')),dlSeg),apiBox,
-el('div',{class:'f'},el('div',{class:'item-h'},el('span',{},t('cd_link')),el('div',{class:'acts'},el('button',{class:'icon-btn',title:t('cd_copy'),onclick:()=>copy(linkBox.value)},ic('copy')))),linkBox),msg);
+el('div',{class:'cfg-g'},el('div',{class:'cfg-g-h'},t('cd_delivery')),el('div',{class:'cfg-g-b'},dlSeg,apiBox)),
+el('div',{class:'cfg-g'},el('div',{class:'cfg-g-h cfg-g-hl'},el('span',{},t('cd_link')),el('button',{class:'icon-btn',type:'button',title:t('cd_copy'),onclick:()=>copy(linkBox.value)},ic('copy'))),linkBox,msg));
 const d=modal(cfg?t('cd_edit'):t('cd_new',account),form,[
 btn(t('cd_save'),'floppy-disk',async()=>{
 try{
@@ -201,7 +224,7 @@ const b={account,label:st.label,delivery:st.delivery,apis:st.apis,settings:st.ov
 if(cfg)await apPost('/api/apicfg/configs/'+cfg.id,b,'PATCH');else await apPost('/api/apicfg/configs',b);
 toast(t('done'));d.close();if(done)done()}catch(e){terr(e)}},'pri'),
 btn(t('cd_reset'),'rotate-left',resetAll),
-btn(t('cancel'),'xmark',()=>d.close())],'xl');
+btn(t('cancel'),'xmark',()=>d.close())],'cfg-ed');
 showApis();refresh()}
 /* ---------- subscription switch of the account dialog ---------- */
 async function subField(a){
