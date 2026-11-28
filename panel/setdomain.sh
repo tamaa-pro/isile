@@ -28,6 +28,7 @@ add_header Referrer-Policy "no-referrer" always;
 add_header Content-Security-Policy "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
 location = /login { limit_req zone=vpnlogin burst=10 nodelay; proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$isile_ip; proxy_set_header X-Forwarded-Proto $PROTO; }
 location ^~ /api/public/ { limit_req zone=vpnlogin burst=30 nodelay; proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$isile_ip; proxy_set_header X-Forwarded-Proto $PROTO; }
+location ^~ /api/hwid { limit_req zone=vpnlogin burst=60 nodelay; proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$isile_ip; proxy_set_header X-Forwarded-Proto $PROTO; }
 location / { proxy_pass http://127.0.0.1:8000; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$isile_ip; proxy_set_header X-Forwarded-Proto $PROTO; }
 EOT
 }

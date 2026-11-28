@@ -1094,10 +1094,37 @@ def track_traffic():
         daily_add(drx,dtx)
     except Exception:
         traceback.print_exc()
-CONN_MODES=("sessions","ips","active")
-CONN_KEY={"sessions":"sess","ips":"ips","active":"act"}
+CONN_MODES=("sessions","ips","active","hwid")
+CONN_KEY={"sessions":"sess","ips":"ips","active":"act","hwid":"hw"}
 CONN_MODE=["ips"]
-CONN_TOTAL={"n":0,"sess":0,"ips":0,"act":0}
+CONN_TOTAL={"n":0,"sess":0,"ips":0,"act":0,"hw":0}
+# ---- HWID counting: the account owner's own app reports a permanent device id ----
+# The app calls /api/hwid every ~30 s while its tunnel is up (and once more with bye=1 when it disconnects).
+# A device is connected while its last beat is younger than HW_TTL; many sessions of one device share one id and count once.
+HW={}          # account -> {hwid: [first beat, last beat, client ip, beats]}
+HW_LOCK=threading.Lock()
+HW_TTL=75
+HW_MAX=64      # distinct ids kept per account (a flood cannot grow the table)
+HW_RE=re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+HW_RATE={}     # ip -> [requests in the window, window start]
+HW_BAD={}      # ip -> [rejected requests, first]
+def hw_live(n,now=None):
+    now=now or time.time()
+    with HW_LOCK:
+        return {h:list(v) for h,v in HW.get(n,{}).items() if now-v[1]<=HW_TTL}
+def hw_purge(now):
+    with HW_LOCK:
+        for n in list(HW):
+            d=HW[n]
+            for h in [h for h,v in d.items() if now-v[1]>HW_TTL*4]:
+                d.pop(h,None)
+            if not d:
+                HW.pop(n,None)
+        for tbl,win in ((HW_RATE,60),(HW_BAD,600)):
+            for k in [k for k,v in tbl.items() if now-v[1]>win]:
+                tbl.pop(k,None)
+def hw_list(d):
+    return sorted(([h,v[2],int(v[0]),int(v[1])] for h,v in d.items()),key=lambda x:x[2])
 def conn_merge(ss,lg):
     """sshd sessions of one account (+ its live UDP Custom log sessions [(ip, last data burst)]) -> one session list.
     UDP Custom that reaches sshd is already among the sshd sessions (adding the log again would count it twice);
@@ -1150,7 +1177,7 @@ def conn_cycle():
     global CONN
     c=db()
     try:
-        rows=c.execute("SELECT name,proto,uid,status,conn_limit FROM accounts").fetchall()
+        rows=c.execute("SELECT name,proto,uid,status,conn_limit,transport FROM accounts").fetchall()
         m=c.execute("SELECT v FROM settings WHERE k='conn_mode'").fetchone()
     finally:
         c.close()
@@ -1165,7 +1192,7 @@ def conn_cycle():
         udp.setdefault(u,[]).append((src.rpartition(":")[0].strip("[]"),dt))
     new={}
     all_ips=set()
-    tot={"sess":0,"ips":0,"act":0}
+    tot={"sess":0,"ips":0,"act":0,"hw":0}
     for r in srows:
         n=r["name"]
         ss=[dict(x) for x in scanned.get(r["uid"],[])] if r["uid"] is not None else []
@@ -1174,15 +1201,31 @@ def conn_cycle():
             continue
         ss=conn_merge(ss,lg)
         e=conn_counts(ss)
+        e["hw"]=e["ips"]
+        if mode=="hwid" and r["transport"]!="udp":
+            # sessions of one device share its id: the count is the live ids (never more than the real sshd sessions);
+            # a UDP Custom session, or an account whose app does not report ids yet, keeps the IP counting
+            real=[x for x in ss if x["via"]!="udp"]
+            hwl=hw_live(n)
+            if hwl and real:
+                e["hw"]=min(len(hwl),len(real))+len({x["ip"] for x in ss if x["via"]=="udp"})
+                e["hwm"]=True
+                e["hwl"]=hw_list(hwl)
         e["n"]=e[key]
         new[n]=e
         all_ips.update(e["ip_list"])
         tot["sess"]+=e["sess"]
         tot["act"]+=e["act"]
         tot["ips"]+=e["unk"]
+        tot["hw"]+=e["hw"]
         L=r["conn_limit"]
         if L and r["status"]=="active":
-            cnt,over=conn_over(ss,L,mode)
+            if mode=="hwid" and e.get("hwm"):
+                es=[x for x in ss if x["pid"]]
+                cnt=e["hw"]
+                over=es[-(cnt-L):] if cnt>L and es else []
+            else:
+                cnt,over=conn_over(ss,L,"ips" if mode=="hwid" else mode)
             if cnt>L:
                 SSH_OVER[n]=SSH_OVER.get(n,0)+1
                 if SSH_OVER[n]>=2:
@@ -1192,6 +1235,16 @@ def conn_cycle():
                 SSH_OVER.pop(n,None)
         else:
             SSH_OVER.pop(n,None)
+    now=time.time()
+    if mode=="hwid":
+        for r in rows:
+            if r["proto"] in ("vless","vmess","trojan") and r["status"]=="active":
+                hwl=hw_live(r["name"],now)
+                if hwl:
+                    ipl=sorted({v[2] for v in hwl.values() if v[2] not in ("-","")})
+                    new[r["name"]]={"sess":0,"ips":len(ipl),"act":0,"ip_list":ipl,"unk":0,"by":{},"hw":len(hwl),"n":len(hwl),"hwm":True,"hwl":hw_list(hwl)}
+                    tot["hw"]+=len(hwl)
+    hw_purge(now)
     tot["ips"]+=len(all_ips)
     tot["n"]=tot[key]
     for n in [n for n in SSH_OVER if n not in new]:
@@ -1201,7 +1254,7 @@ def conn_cycle():
     CONN=new
 def conn_x(n):
     cn=CONN.get(n,{})
-    return {"sessions":cn.get("sess",0),"ips":cn.get("ips",0),"active":cn.get("act",0)}
+    return {"sessions":cn.get("sess",0),"ips":cn.get("ips",0),"active":cn.get("act",0),"hwid":cn.get("hw",0) if cn.get("hwm") else None}
 def conn_worker():
     while True:
         time.sleep(1)
@@ -2479,6 +2532,7 @@ def lst():
         cn=CONN.get(r["name"],{})
         o["conn"]=cn.get("n",0)
         o["conn_x"]=conn_x(r["name"])
+        o["conn_mode"]=CONN_MODE[0]
         o["conn_limit"]=r["conn_limit"]
         o["active"]=is_live(r["name"],r["proto"],r["status"],cn.get("sess",0))
         o["flow"]=is_flow(r["name"],r["proto"],o["active"])
@@ -2623,7 +2677,7 @@ def info(name):
     cn=CONN.get(n,{})
     act=is_live(n,r["proto"],r["status"],cn.get("sess",0))
     spu,spd=speed_of(n) if act else (0,0)
-    return jsonify(flow=is_flow(n,r["proto"],act),conn=cn.get("n",0),conn_x=conn_x(n),conn_ips=cn.get("ip_list",[]),conn_by=cn.get("by",{}),conn_mode=CONN_MODE[0],conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,host=dom,server_ip=get("server_ip",""),note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
+    return jsonify(flow=is_flow(n,r["proto"],act),conn=cn.get("n",0),conn_x=conn_x(n),conn_ips=cn.get("ip_list",[]),conn_by=cn.get("by",{}),conn_hw=cn.get("hwl",[]),conn_mode=CONN_MODE[0],conn_limit=r["conn_limit"],items=items,active=act,sp_up=spu,sp_down=spd,status=r["status"],up=r["up"],down=r["down"],quota=r["quota"],created=r["created"],expires=r["expires"],proto=p,transport=r["transport"],tls=r["tls"],tls_on=t_on,host=dom,server_ip=get("server_ip",""),note=r["note"],dns_ok=bool(slowdns_domain() and slowdns_pub()) if r["transport"]=="slowdns" else bool(vaydns_domain() and vaydns_pub()))
 def parse_common(d,creating):
     try:
         out={}
@@ -2856,6 +2910,70 @@ def server_cc():
         GEO[1]=True
         threading.Thread(target=geo_job,args=(ip,),daemon=True).start()
     return ""
+def hwid_limited(ip):
+    now=time.time()
+    r=HW_RATE.get(ip)
+    if not r or now-r[1]>60:
+        r=HW_RATE[ip]=[0,now]
+    r[0]+=1
+    b=HW_BAD.get(ip)
+    return r[0]>600 or bool(b and b[0]>=20 and now-b[1]<600)
+def hwid_bad(ip):
+    now=time.time()
+    b=HW_BAD.get(ip)
+    if not b or now-b[1]>600:
+        b=HW_BAD[ip]=[0,now]
+    b[0]+=1
+@app.route("/api/hwid",methods=["GET","POST"])
+def hwid_beat():
+    """Device beacon of the owner's own app: u=account name, h=device id, and either k=account secret or sig+ts
+    (sig = hex HMAC-SHA256 keyed by the secret over "u|h|ts", ts = unix seconds); bye=1 reports a disconnect."""
+    ip=client_ip()
+    if hwid_limited(ip):
+        return err("too_many",429)
+    d=request.get_json(silent=True)
+    d=d if isinstance(d,dict) else {}
+    g=lambda k:str(d.get(k) if d.get(k) is not None else request.values.get(k,"")).strip()
+    u,h=g("u"),g("h")
+    if not RE_UNAME.fullmatch(u) or not HW_RE.fullmatch(h):
+        hwid_bad(ip)
+        return err("bad_request",400)
+    c=db()
+    try:
+        r=c.execute("SELECT proto,secret,status,transport FROM accounts WHERE name=?",(u,)).fetchone()
+    finally:
+        c.close()
+    ok=False
+    if r:
+        k,sig,ts=g("k"),g("sig"),g("ts")
+        if k:
+            ok=hmac.compare_digest(k.encode(),r["secret"].encode())
+        elif sig and ts.isdigit() and abs(time.time()-int(ts))<=300:
+            want=hmac.new(r["secret"].encode(),("%s|%s|%s"%(u,h,ts)).encode(),"sha256").hexdigest()
+            ok=hmac.compare_digest(sig.lower().encode(),want.encode())
+    if not ok:
+        hwid_bad(ip)
+        return err("denied",403)
+    if r["status"]!="active":
+        return err("inactive",403)
+    if r["proto"]=="ssh" and r["transport"]=="udp":
+        return jsonify(ok=True,counted=False,ttl=HW_TTL)
+    now=time.time()
+    with HW_LOCK:
+        t=HW.setdefault(u,{})
+        if g("bye") in ("1","true"):
+            t.pop(h,None)
+        else:
+            v=t.get(h)
+            if v and now-v[1]<=HW_TTL*4:
+                v[1],v[2],v[3]=now,ip,v[3]+1
+            else:
+                if len(t)>=HW_MAX:
+                    t.pop(min(t,key=lambda x:t[x][1]),None)
+                t[h]=[now,now,ip,1]
+    resp=jsonify(ok=True,counted=CONN_MODE[0]=="hwid",ttl=HW_TTL)
+    resp.headers["Cache-Control"]="no-store"
+    return resp
 @app.get("/api/public/<name>")
 def public_api(name):
     r=public_row(name)

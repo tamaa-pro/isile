@@ -293,7 +293,7 @@ const tlsTag=tagOf(a);
 return el('tr',{},
 el('td',{},el('b',{},sti(a),a.name),a.note?el('div',{class:'muted sm'},a.note):null),
 el('td',{},badge(pk(a)),el('div',{class:'muted sm'},tlsTag)),
-el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active,a.flow),a.proto==='ssh'?connPill(a):null),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
+el('td',{},el('span',{class:'live-row'},liveDot(act&&a.active,a.flow),(a.proto==='ssh'||a.conn_mode==='hwid')?connPill(a):null),act&&a.active?el('div',{class:'muted sm ltr'},spd(a.sp_up,a.sp_down)):null),
 el('td',{class:'usage'},el('div',{class:'ltr'},'↑ '+bytes(a.up)+'  ↓ '+bytes(a.down)),el('div',{class:'muted sm ltr'},bytes(used)+' / '+(a.quota?bytes(a.quota):'∞')),a.quota?meter(used/a.quota*100,used/a.quota>.9?'bad':''):null),
 el('td',{},el('div',{class:'dtv'},dt(a.expires)),el('div',{class:'muted sm'},left(a.expires))),
 el('td',{},el('div',{class:'acts'},
@@ -372,8 +372,9 @@ const used=r.up+r.down;
 const head=el('div',{class:'info-h'},
 el('div',{class:'row'},badge(pk(r)),pill(SC[r.status],t('st_'+r.status))),
 el('div',{class:'kv'},el('span',{},ic('wifi'),t('c_live')),el('span',{class:'live-row'},liveDot(r.active,r.flow),t(r.active?(r.flow?'live_on':'live_idle'):'live_off'))),
-r.proto==='ssh'?el('div',{class:'kv'},el('span',{},ic('plug'),t('c_conn')),el('b',{class:'ltr'},r.conn+' / '+(r.conn_limit||'∞'))):null,
-r.proto==='ssh'&&r.conn_x?el('div',{class:'muted sm ltr'},t('cm_detail',r.conn_x.sessions,r.conn_x.ips,r.conn_x.active)):null,
+(r.proto==='ssh'||r.conn_mode==='hwid')?el('div',{class:'kv'},el('span',{},ic('plug'),t('c_conn')),el('b',{class:'ltr'},r.conn+' / '+(r.conn_limit||'∞'))):null,
+r.proto==='ssh'&&r.conn_x?el('div',{class:'muted sm ltr'},t('cm_detail',r.conn_x.sessions,r.conn_x.ips,r.conn_x.active)+(r.conn_x.hwid!=null?' · HWID '+r.conn_x.hwid:'')):null,
+r.conn_hw&&r.conn_hw.length?el('div',{class:'kv'},el('span',{},ic('fingerprint'),t('c_hwids')),el('b',{class:'ltr',style:'word-break:break-all'},r.conn_hw.map(x=>x[0].length>14?x[0].slice(0,6)+'…'+x[0].slice(-6):x[0]).join(' · '))):null,
 r.proto==='ssh'&&r.conn_ips&&r.conn_ips.length?el('div',{class:'kv'},el('span',{},ic('network-wired'),t('c_ips')),el('b',{class:'ltr',style:'word-break:break-all'},r.conn_ips.join(' · '))):null,
 r.active?el('div',{class:'kv'},el('span',{},ic('gauge-high'),t('p_speed')),el('b',{class:'ltr'},spd(r.sp_up,r.sp_down))):null,
 el('div',{class:'kv'},el('span',{},ic('chart-line'),t('c_usage')),el('b',{class:'ltr'},bytes(used)+' / '+(r.quota?bytes(r.quota):'∞'))),
@@ -777,13 +778,20 @@ el('button',{class:'icon-btn',title:t('lg_download'),onclick:()=>dlLog(i.id)},ic
 el('button',{class:'icon-btn danger',title:t('lg_clear'),onclick:()=>clearLog(i.id,fillLogs)},ic('eraser'))))):[el('div',{class:'empty'},t('lg_none'))]),el('div',{class:'muted sm'},t('lg_unit_note')))
 }catch(e){terr(e)}
 };
+const hwHelp=()=>{const u=location.origin+'/api/hwid';const pre=x=>el('pre',{class:'hw-pre ltr'},x);const p=k=>el('p',{},t(k));
+const ex1='POST '+u+'\nContent-Type: application/json\n\n{"u":"<account name>","h":"<HWID>","k":"<password or UUID>"}';
+const ex2='ts  = current unix time in seconds\nsig = hex( HMAC-SHA256( key = secret, msg = "<name>|<HWID>|<ts>" ) )\n\nGET '+u+'?u=<name>&h=<HWID>&ts=<ts>&sig=<sig>';
+const ex3='GET '+u+'?u=<name>&h=<HWID>&k=<secret>&bye=1';
+const ex4='val mac = Mac.getInstance("HmacSHA256")\nmac.init(SecretKeySpec(secret.toByteArray(), "HmacSHA256"))\nval sig = mac.doFinal("$name|$hwid|$ts".toByteArray()).joinToString("") { "%02x".format(it) }';
+modal(t('hw_title'),el('div',{class:'hw-help'},p('hw_intro'),el('h4',{},t('hw_h_id')),p('hw_id'),el('h4',{},t('hw_h_beat')),p('hw_beat'),pre(ex1),p('hw_sig'),pre(ex2),pre(ex4),el('h4',{},t('hw_h_bye')),p('hw_bye'),pre(ex3),el('h4',{},t('hw_h_count')),p('hw_count'),el('h4',{},t('hw_h_ssh')),p('hw_ssh'),el('h4',{},t('hw_h_notes')),p('hw_notes')),[btn(t('hw_copy'),'copy',()=>copy(u))])};
 const SECS={
 appearance:()=>sec('palette',t('s_appearance'),el('div',{class:'form cols one'},
 themeBox,
 field(t('s_language'),seg([{v:'en',l:'English',i:'language'},{v:'ar',l:'العربية',i:'language'}],LANG,setLang)),
 field(t('s_speed'),seg([{v:'bytes',l:t('spu_bytes')},{v:'bits',l:t('spu_bits')}],SPU,v=>{setSpu(v);toast(t('done'))}),t('s_speed_hint')),
 field(t('s_view'),seg([{v:'mobile',l:t('view_mobile'),i:'mobile-screen'},{v:'desktop',l:t('view_desktop'),i:'desktop'}],vw,v=>{try{localStorage.setItem('view',v)}catch(e){}location.reload()}),t('s_view_hint')),
-field(t('s_conn_mode'),seg([{v:'sessions',l:t('cm_sessions'),i:'plug'},{v:'ips',l:t('cm_ips'),i:'network-wired'},{v:'active',l:t('cm_active'),i:'bolt'}],s.conn_mode||'ips',async v=>{try{await api('POST','/api/settings',{conn_mode:v});s.conn_mode=v;toast(t('done'))}catch(e){terr(e)}}),t('s_conn_mode_hint')),
+field(t('s_conn_mode'),seg([{v:'sessions',l:t('cm_sessions'),i:'plug'},{v:'ips',l:t('cm_ips'),i:'network-wired'},{v:'active',l:t('cm_active'),i:'bolt'},{v:'hwid',l:t('cm_hwid'),i:'fingerprint'}],s.conn_mode||'ips',async v=>{try{await api('POST','/api/settings',{conn_mode:v});s.conn_mode=v;toast(t('done'))}catch(e){terr(e)}}),t('s_conn_mode_hint')),
+el('div',{class:'row'},btn(t('hw_btn'),'circle-question',hwHelp)),
 el('div',{class:'f'},el('span',{},t('s_tz')),tzBox,el('div',{class:'kv'},el('span',{},t('s_tz_utc')),tzSw),el('small',{class:'muted'},t('s_tz_hint'))),
 el('div',{class:'f'},el('span',{},t('dy_title')),el('div',{class:'kv'},el('span',{},t('dy_on')),dySw),dyBox,dySave,el('small',{class:'muted'},t('dy_hint'))))),
 password:()=>sec('key',t('s_security'),el('div',{class:'form cols'},field(t('s_cur'),o),field(t('s_new'),n,t('s_new_hint')),field(t('s_confirm'),c),cdF,el('div',{class:'row'},btn(t('s_change'),'floppy-disk',savePw,'pri')),el('div',{class:'muted sm'},t('s_pw_note')))),

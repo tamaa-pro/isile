@@ -507,3 +507,7 @@ body.menu-open .side,:root[dir=rtl] body.menu-open .side{transform:none;visibili
 .sec-h{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:700;margin-bottom:18px}
 .sec-h i{width:20px;text-align:center;color:var(--pri2)}
 @media(prefers-reduced-motion:reduce){.side,.scrim{transition-duration:.01ms!important;transition-delay:0s!important}}
+
+.hw-help p{margin:0 0 10px;line-height:1.8;font-size:14px}
+.hw-help h4{margin:16px 0 6px;font-size:15px}
+.hw-pre{direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-all;background:var(--bg2,rgba(127,127,127,.12));border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:10px 12px;margin:0 0 10px;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;user-select:all}
