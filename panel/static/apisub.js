@@ -1,5 +1,5 @@
 'use strict';
-/* isile 1.10.2 (1.9.7): "API and subscription" card of the settings page, the configs window, and the subscription switch of the account dialog.
+/* isile 1.10.5 (1.9.7): "API and subscription" card of the settings page, the configs window, and the subscription switch of the account dialog.
    Loaded after i18n.js and before app.js; it only uses the helpers of app.js when a function runs. Backend: apisub.py */
 Object.assign(I18N.ar,{
 ap_title:'API ورابط الاشتراك',ap_desc:'يتيح لتطبيق VPN خاص أو لأي تطبيق يدعم رابط الاشتراك جلب كونفيجات حسابات محددة بالإعدادات التي تختارها هنا، فلا تكفي بيانات الحساب وحدها (TLS وPayload وSNI وغيرها).',
@@ -10,12 +10,15 @@ ap_secret:'الرابط سرّي: من يملكه يقرأ بيانات الحس
 ap_struct:'بنية البيانات المرسلة',st_links:'روابط',st_json:'JSON',ap_struct_links:'كل كونفيج يُرسل كرابط مشاركة جاهز (ssh:// وvless:// وغيرها).',ap_struct_json:'كل كونفيج يُرسل ككود JSON تظهر فيه كل معطياته على حدة (المضيف والمنفذ وTLS وSNI وغيرها).',
 ap_enc:'تشفير البيانات',ap_enc_hint:'يشفّر كل ما يخرج من هذا الرابط بخوارزمية AES-256-GCM، فلا يقرؤه إلا تطبيق يملك المفتاح. لا يؤثر على رابط الاشتراك.',ap_enc_key:'مفتاح التشفير',ap_enc_ph:'8 أحرف على الأقل (حروف وأرقام ورموز إنجليزية بلا مسافات)',ap_enc_gen:'توليد مفتاح عشوائي',ap_enc_save:'حفظ المفتاح',ap_enc_need:'يحتاج التطبيق المستلم إلى نفس المفتاح لفك التشفير. غيّر المفتاح فيتوقف فك التشفير في التطبيقات التي تحمل القديم.',
 ap_opts:'إعدادات الرابط',
-ap_ctl:'التحكم بما يُرسل',ap_ctl_hint:'اختر الحسابات والإعدادات التي تصل إلى التطبيق، ولكل كونفيج خيار الإرسال عبر API أو الاشتراك أو كليهما.',
+ap_pw:'كلمة المرور',ap_pw_hint:'لا يرسل الرابط أي بيانات قبل أن يُدخل التطبيق كلمة المرور الصحيحة: يردّ بطلب كلمة المرور فتظهر للمستخدم نافذة إدخالها. تُحفظ مشفّرة (هاش) ولا تُعرض بعد الحفظ.',ap_pw_ph:'4 أحرف على الأقل (حروف وأرقام ورموز إنجليزية بلا مسافات)',ap_pw_ph_set:'اكتب كلمة مرور جديدة لتغيير الحالية',ap_pw_save:'حفظ كلمة المرور',ap_pw_saved:'كلمة المرور مفعّلة ومحفوظة',ap_pw_show:'إظهار / إخفاء',ap_pw_note:'عند تغيير كلمة المرور تطلب التطبيقات التي تحمل القديمة الجديدة عند أول طلب. بعد {0} محاولات خاطئة يُحظر العنوان مؤقتاً.',
+ap_cfgs_btn:'إعداد الكونفيجات',ap_cfgs_hint:'الكونفيجات المفعّلة هنا تصل إلى رابط API هذا وحده، ولا يتأثر بها أي رابط API آخر.',
+sb_cfgs_btn:'إعداد كونفيجات الاشتراك',sb_cfgs_hint:'الكونفيجات المفعّلة هنا تصل عبر رابط الاشتراك للحساب صاحبها.',
+cd_title_api:'كونفيجات {0}',cd_title_sub:'كونفيجات الاشتراك',cd_in_api:'يُرسل عبر هذا الرابط',cd_in_sub:'يُرسل عبر الاشتراك',cd_shared:'الكونفيج نفسه قد يصل روابط أخرى، وحذفه يحذفه منها كلها.',
 sb_title:'رابط الاشتراك',sb_on:'تفعيل رابط الاشتراك',sb_hint:'التفعيل هنا يفتح خيار الاشتراك في نافذة إنشاء الحساب فقط. ولا يُصدر الرابط شيئاً قبل أن تُنشأ كونفيجات لذلك الحساب وتُضبط على الإرسال عبر الاشتراك.',
 sb_count:'{0} حساب مفعّل له الاشتراك',
 cd_title:'ما يُرسل عبر API والاشتراك',cd_add:'إضافة كونفيج',cd_empty:'لا توجد كونفيجات بعد. أضف كونفيجاً من أحد الحسابات.',cd_pick:'اختر الحساب',cd_pick_none:'لا توجد حسابات مدعومة. يدعم التطبيق: SSH (WS وSSL وDirect وVayDNS وSlowDNS) وV2Ray (WS وgRPC وXHTTP).',
 cd_search:'بحث عن حساب',cd_new:'كونفيج جديد من {0}',cd_edit:'تعديل الكونفيج',cd_save:'حفظ',cd_dup:'نسخ الكونفيج',cd_del:'حذف',cd_del_confirm:'حذف هذا الكونفيج؟',cd_copy:'نسخ الرابط',
-cd_label:'اسم الكونفيج',cd_label_hint:'الاسم الذي يظهر في التطبيق. يمكن إنشاء عدة كونفيجات من الحساب نفسه.',cd_delivery:'الإرسال',cd_apis:'روابط API المستلمة',cd_apis_hint:'بدون اختيار = كل روابط API',
+cd_label:'اسم الكونفيج',cd_label_hint:'الاسم الذي يظهر في التطبيق. يمكن إنشاء عدة كونفيجات من الحساب نفسه.',cd_delivery:'الإرسال',cd_apis:'روابط API المستلمة',cd_apis_hint:'اختر روابط API التي يصلها هذا الكونفيج؛ بلا اختيار لا يُرسل عبر API',
 cd_reset:'إعادة الكل للتلقائي',cd_link:'الرابط الناتج',cd_auto:'تلقائي',cd_inactive:'الحساب غير نشط فلا يُرسل',cd_no_delivery:'لا يُرسل',
 dl_none:'لا شيء',dl_api:'API',dl_sub:'اشتراك',dl_both:'الاثنان',
 g_id:'الهوية',g_conn:'الاتصال',g_ws:'WebSocket',g_payload:'Payload والبروكسي',g_tls:'TLS',g_net:'الشبكة',g_dns:'نفق DNS',g_dnsadv:'خيارات DNS المتقدمة',g_adv:'متقدم',
@@ -28,7 +31,7 @@ cf_flow:'Flow',cf_encryption:'Encryption',cf_alterId:'alterId',cf_vmessScy:'تش
 ch_host:'غيّره مثلاً إلى نطاق CDN أو عنوان آخر. الفارغ = نطاق اللوحة',ch_port:'الفارغ = المنفذ الافتراضي حسب TLS',
 ch_payload:'الوسوم: [host] [port] [host_port] [crlf]',ch_proxyHost:'اتركه فارغاً لعدم استعمال بروكسي',ch_sni:'الفارغ = نطاق اللوحة',ch_dnsResolver:'مثل 8.8.8.8:53 أو dns.google:853 أو https://dns.google/dns-query',
 ch_dnsListen:'مثل 7000 أو 127.0.0.1:7000، والفارغ = تلقائي',ch_mux:'يصل التطبيق عبر JSON فقط، ولا يحمله الرابط',ch_dnsExtra:'خيارات تُمرَّر للمحرك كما هي',
-e_api_bad_field:'قيمة غير صالحة',e_api_bad_enc_key:'مفتاح التشفير: من 8 إلى 128 حرفاً إنجليزياً أو رقماً أو رمزاً بلا مسافات',e_api_unsupported:'هذا الحساب غير مدعوم في التطبيق',e_too_many:'تم بلوغ الحد الأقصى',
+e_api_bad_field:'قيمة غير صالحة',e_api_bad_password:'كلمة المرور: من 4 إلى 64 حرفاً إنجليزياً أو رقماً أو رمزاً بلا مسافات',e_api_bad_enc_key:'مفتاح التشفير: من 8 إلى 128 حرفاً إنجليزياً أو رقماً أو رمزاً بلا مسافات',e_api_unsupported:'هذا الحساب غير مدعوم في التطبيق',e_too_many:'تم بلوغ الحد الأقصى',
 sub_f:'رابط الاشتراك',sub_f_on:'تفعيل رابط الاشتراك لهذا الحساب',sub_f_hint:'لا يُصدر الرابط شيئاً حتى تُنشأ كونفيجات من هذا الحساب وتُضبط على الإرسال عبر الاشتراك.',sub_f_na:'غير متاح لـ UDP Custom وV2Ray عبر DNS',sub_f_cfgs:'{0} كونفيج عبر الاشتراك',
 l_sub_link:'رابط الاشتراك'});
 Object.assign(I18N.en,{
@@ -40,12 +43,15 @@ ap_secret:'The link is secret: anyone who has it can read the account data sent 
 ap_struct:'Structure of the data sent',st_links:'Links',st_json:'JSON',ap_struct_links:'Each config is sent as a ready share link (ssh://, vless:// and so on).',ap_struct_json:'Each config is sent as JSON code where every setting appears on its own (host, port, TLS, SNI and more).',
 ap_enc:'Encrypt the data',ap_enc_hint:'Encrypts everything this link returns with AES-256-GCM, so only an app that holds the key can read it. It does not affect the subscription link.',ap_enc_key:'Encryption key',ap_enc_ph:'At least 8 characters (English letters, digits and symbols, no spaces)',ap_enc_gen:'Generate a random key',ap_enc_save:'Save the key',ap_enc_need:'The receiving app needs the same key to decrypt. Changing the key stops decryption in apps that hold the old one.',
 ap_opts:'Link settings',
-ap_ctl:'Control what is sent',ap_ctl_hint:'Choose the accounts and settings that reach the app. Each config can be sent through the API, the subscription, both or neither.',
+ap_pw:'Password',ap_pw_hint:'The link sends no data until the app supplies the right password: it answers that a password is required and the app shows a window to type it. It is stored as a hash and is not shown after saving.',ap_pw_ph:'At least 4 characters (English letters, digits and symbols, no spaces)',ap_pw_ph_set:'Type a new password to change the current one',ap_pw_save:'Save password',ap_pw_saved:'Password is on and saved',ap_pw_show:'Show / hide',ap_pw_note:'After a password change, apps holding the old one ask for the new one on their next request. After {0} wrong attempts the address is blocked for a while.',
+ap_cfgs_btn:'Set up configs',ap_cfgs_hint:'Configs switched on here reach this API link only; no other API link is affected.',
+sb_cfgs_btn:'Set up subscription configs',sb_cfgs_hint:'Configs switched on here are delivered through the subscription link of their account.',
+cd_title_api:'Configs of {0}',cd_title_sub:'Subscription configs',cd_in_api:'Sent through this link',cd_in_sub:'Sent through the subscription',cd_shared:'The same config may also reach other links, and deleting it removes it from all of them.',
 sb_title:'Subscription link',sb_on:'Enable subscription link',sb_hint:'Enabling it here only unlocks the subscription switch in the create-account window. The link returns nothing until configs are made from that account and set to be sent through the subscription.',
 sb_count:'{0} accounts with subscription enabled',
 cd_title:'What is sent through the API and subscription',cd_add:'Add config',cd_empty:'No configs yet. Add one from an account.',cd_pick:'Choose the account',cd_pick_none:'No supported accounts. The app supports SSH (WS, SSL, Direct, VayDNS, SlowDNS) and V2Ray (WS, gRPC, XHTTP).',
 cd_search:'Search accounts',cd_new:'New config from {0}',cd_edit:'Edit config',cd_save:'Save',cd_dup:'Duplicate config',cd_del:'Delete',cd_del_confirm:'Delete this config?',cd_copy:'Copy link',
-cd_label:'Config name',cd_label_hint:'The name shown in the app. You can make several configs from the same account.',cd_delivery:'Delivery',cd_apis:'Receiving API links',cd_apis_hint:'None selected = every API link',
+cd_label:'Config name',cd_label_hint:'The name shown in the app. You can make several configs from the same account.',cd_delivery:'Delivery',cd_apis:'Receiving API links',cd_apis_hint:'Pick the API links this config reaches; with none picked it is not sent through the API',
 cd_reset:'Reset everything to auto',cd_link:'Resulting link',cd_auto:'auto',cd_inactive:'Account is not active, so it is not sent',cd_no_delivery:'Not sent',
 dl_none:'None',dl_api:'API',dl_sub:'Subscription',dl_both:'Both',
 g_id:'Identity',g_conn:'Connection',g_ws:'WebSocket',g_payload:'Payload & proxy',g_tls:'TLS',g_net:'Network',g_dns:'DNS tunnel',g_dnsadv:'Advanced DNS options',g_adv:'Advanced',
@@ -58,7 +64,7 @@ cf_flow:'Flow',cf_encryption:'Encryption',cf_alterId:'alterId',cf_vmessScy:'VMes
 ch_host:'Change it to a CDN domain or another address, for example. Empty = the panel domain',ch_port:'Empty = the default port for the TLS setting',
 ch_payload:'Tags: [host] [port] [host_port] [crlf]',ch_proxyHost:'Leave empty for no proxy',ch_sni:'Empty = the panel domain',ch_dnsResolver:'Such as 8.8.8.8:53, dns.google:853 or https://dns.google/dns-query',
 ch_dnsListen:'Such as 7000 or 127.0.0.1:7000; empty = automatic',ch_mux:'Reaches the app through JSON only; a link cannot carry it',ch_dnsExtra:'Flags passed to the engine as they are',
-e_api_bad_field:'Invalid value',e_api_bad_enc_key:'Encryption key: 8 to 128 English letters, digits or symbols, no spaces',e_api_unsupported:'This account is not supported by the app',e_too_many:'Limit reached',
+e_api_bad_field:'Invalid value',e_api_bad_password:'Password: 4 to 64 English letters, digits or symbols, no spaces',e_api_bad_enc_key:'Encryption key: 8 to 128 English letters, digits or symbols, no spaces',e_api_unsupported:'This account is not supported by the app',e_too_many:'Limit reached',
 sub_f:'Subscription link',sub_f_on:'Enable the subscription link for this account',sub_f_hint:'The link returns nothing until configs are made from this account and set to be sent through the subscription.',sub_f_na:'Not available for UDP Custom and V2Ray over DNS',sub_f_cfgs:'{0} configs via subscription',
 l_sub_link:'Subscription link'});
 const APS={snap:null};
@@ -75,7 +81,7 @@ const s=APS.snap;
 if(!s){body.replaceChildren(el('div',{class:'empty'},ic('spinner','fa-spin')));return}
 const apiSw=sw(s.api_on,async v=>{try{await apPost('/api/apicfg/settings',{api_on:v});toast(t('done'))}catch(e){terr(e)}draw()});
 const subSw=sw(s.sub_on,async v=>{try{await apPost('/api/apicfg/settings',{sub_on:v});toast(t('done'))}catch(e){terr(e)}draw()});
-const keys=s.api_on?el('div',{class:'stack ap-keys'},...s.keys.map(k=>keyRow(k)),el('div',{class:'row'},btn(t('ap_add'),'plus',async()=>{try{await apPost('/api/apicfg/keys',{});draw()}catch(e){terr(e)}}),btn(t('ap_ctl'),'sliders',()=>configsDlg(draw),'pri')),el('div',{class:'hint'},ic('circle-info'),t('ap_secret'))):null;
+const keys=s.api_on?el('div',{class:'stack ap-keys'},...s.keys.map(k=>keyRow(k)),el('div',{class:'row'},btn(t('ap_add'),'plus',async()=>{try{await apPost('/api/apicfg/keys',{});draw()}catch(e){terr(e)}})),el('div',{class:'hint'},ic('circle-info'),t('ap_secret'))):null;
 const nSub=s.accounts.filter(a=>a.sub).length;
 body.replaceChildren(...[
 el('div',{class:'muted sm'},t('ap_desc')),
@@ -83,7 +89,7 @@ el('div',{class:'f'},el('div',{class:'kv'},el('span',{},t('ap_on')),apiSw),el('s
 keys,
 el('div',{class:'ap-sep'}),
 el('div',{class:'f'},el('div',{class:'kv'},el('span',{},t('sb_on')),subSw),el('small',{class:'muted'},t('sb_hint')),s.sub_on?el('small',{class:'muted'},t('sb_count',nSub)):null),
-s.sub_on&&!s.api_on?el('div',{class:'row'},btn(t('ap_ctl'),'sliders',()=>configsDlg(draw),'pri')):null].filter(Boolean))};
+s.sub_on?el('div',{class:'row'},btn(t('sb_cfgs_btn'),'sliders',()=>configsDlg(draw,{sub:true}),'pri')):null].filter(Boolean))};
 const keyRow=k=>{
 const url=el('input',{readonly:true,dir:'ltr',value:k.url});
 const en=sw(k.enabled,async v=>{try{await apPost('/api/apicfg/keys/'+k.id,{enabled:v},'PATCH');toast(t('done'))}catch(e){terr(e)}draw()});
@@ -101,10 +107,23 @@ el('button',{type:'button',class:'icon-btn',title:t('ap_enc_gen'),onclick:()=>{k
 el('button',{type:'button',class:'icon-btn',title:t('ap_enc_save'),onclick:kSave},ic('floppy-disk'))),
 el('small',{class:'muted'},t('ap_enc_need')));
 encBox.hidden=!k.enc_on;
+const pwin=el('input',{type:'password',dir:'ltr',autocomplete:'new-password',spellcheck:'false',maxlength:64,placeholder:t(k.pw_set?'ap_pw_ph_set':'ap_pw_ph')});
+const pwSave=()=>{const v=pwin.value.trim();if(v)upd({password:v,pw_on:true})};
+const pwBox=el('div',{class:'f'},el('span',{},t('ap_pw')),
+el('div',{class:'inp-row'},pwin,el('button',{type:'button',class:'icon-btn',title:t('ap_pw_show'),onclick:()=>{pwin.type=pwin.type==='password'?'text':'password'}},ic('eye')),
+el('button',{type:'button',class:'icon-btn',title:t('ap_pw_save'),onclick:pwSave},ic('floppy-disk'))),
+k.pw_on&&k.pw_set?el('small',{class:'muted'},ic('circle-check'),' '+t('ap_pw_saved')):null,
+el('small',{class:'muted'},t('ap_pw_note',8)));
+pwBox.hidden=!k.pw_on;
+pwin.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();pwSave()}});
+const pwSw=sw(k.pw_on,v=>{if(v){if(k.pw_set)upd({pw_on:true});else{pwBox.hidden=false;pwin.focus()}}else upd({pw_on:false})});
 const opts=el('div',{class:'ap-opts'},
+el('div',{class:'row'},btn(t('ap_cfgs_btn'),'sliders',()=>configsDlg(draw,{key:k}),'pri')),
 el('div',{class:'f'},el('span',{},t('ap_struct')),stSeg,el('small',{class:'muted'},t(k.structure==='json'?'ap_struct_json':'ap_struct_links'))),
 el('div',{class:'f'},el('div',{class:'kv'},el('span',{},ic('lock'),t('ap_enc')),encSw),el('small',{class:'muted'},t('ap_enc_hint'))),
-encBox);
+encBox,
+el('div',{class:'f'},el('div',{class:'kv'},el('span',{},ic('key'),t('ap_pw')),pwSw),el('small',{class:'muted'},t('ap_pw_hint'))),
+pwBox);
 return el('div',{class:'ap-key'+(k.enabled?'':' off')},
 el('div',{class:'ap-key-h'},el('b',{},k.name||'API'),el('span',{class:'muted sm'},t('ap_cfgs',k.configs)+' · '+(k.hits?t('ap_hits',apNum(k.hits))+' · '+apAgo(k.last):t('ap_never'))),en),
 el('div',{class:'inp-row'},url,el('button',{class:'icon-btn',title:t('copy'),onclick:()=>copy(k.url)},ic('copy')),
@@ -116,42 +135,62 @@ draw();
 api('GET','/api/apicfg').then(s=>{APS.snap=s;draw()}).catch(terr);
 return box}
 /* ---------- configs window ---------- */
-function configsDlg(onClose){
+function configsDlg(onClose,scope){
+scope=scope||{};
+const kid=scope.key?scope.key.id:null;
+const hasApi=c=>c.delivery==='api'||c.delivery==='both';
+const hasSub=c=>c.delivery==='sub'||c.delivery==='both';
+const inScope=c=>kid?(hasApi(c)&&c.apis.includes(kid)):scope.sub?hasSub(c):true;
+const preset=kid?{delivery:'api',apis:[kid]}:scope.sub?{delivery:'sub',apis:[]}:null;
 const list=el('div',{class:'stack cfgs'});
+const setScope=async(c,on)=>{
+let delivery=c.delivery,apis=c.apis.slice(),b;
+if(kid){
+if(on){if(!apis.includes(kid))apis.push(kid);delivery=delivery==='sub'?'both':delivery==='none'?'api':delivery}
+else{apis=apis.filter(x=>x!==kid);if(!apis.length)delivery=delivery==='both'?'sub':delivery==='api'?'none':delivery}
+b={delivery,apis}}
+else{
+if(on)delivery=delivery==='api'?'both':delivery==='none'?'sub':delivery;
+else delivery=delivery==='both'?'api':delivery==='sub'?'none':delivery;
+b={delivery}}
+await apPost('/api/apicfg/configs/'+c.id,b,'PATCH')};
 const draw=()=>{
 const s=APS.snap;
-const rows=s.configs.map(c=>cfgRow(c,s));
+const all=s.configs.slice().sort((a,b)=>(inScope(b)?1:0)-(inScope(a)?1:0));
+const rows=all.map(c=>cfgRow(c,s));
 list.replaceChildren(...(rows.length?rows:[el('div',{class:'empty'},t('cd_empty'))]))};
 const cfgRow=(c,s)=>{
-const dl=dd(DL_OPTS(),c.delivery,async v=>{try{await apPost('/api/apicfg/configs/'+c.id,{delivery:v},'PATCH');toast(t('done'))}catch(e){terr(e)}draw()},150);
-return el('div',{class:'cfg-i'+(c.status!=='active'?' off':'')},
+const on=inScope(c);
+const swi=sw(on,async v=>{try{await setScope(c,v);toast(t('done'))}catch(e){terr(e)}draw()});
+return el('div',{class:'cfg-i'+(c.status!=='active'||!on?' off':'')},
 el('div',{class:'cfg-t'},el('b',{},c.label),el('div',{class:'muted sm ltr'},c.account+' · '+c.type+' · '+c.host+':'+c.port),
 c.status!=='active'?el('div',{class:'muted sm'},ic('triangle-exclamation'),' '+t('cd_inactive')):null,
 c.delivery==='none'?el('div',{class:'muted sm'},t('cd_no_delivery')):null),
-el('div',{class:'cfg-a'},dl,
+el('div',{class:'cfg-a'},kid||scope.sub?el('span',{class:'muted sm'},t(kid?'cd_in_api':'cd_in_sub')):null,kid||scope.sub?swi:null,
 el('button',{class:'icon-btn',title:t('cd_edit'),onclick:()=>cfgForm(c.account,c,draw)},ic('pen')),
 el('button',{class:'icon-btn',title:t('cd_dup'),onclick:async()=>{try{await apPost('/api/apicfg/configs',{account:c.account,label:'',delivery:c.delivery,apis:c.apis,settings:c.settings});draw()}catch(e){terr(e)}}},ic('clone')),
 el('button',{class:'icon-btn danger',title:t('cd_del'),onclick:()=>ask(t('cd_del_confirm'),t('cd_del'),async()=>{try{await apPost('/api/apicfg/configs/'+c.id+'/delete',{});draw()}catch(e){terr(e);return false}})},ic('trash'))))};
-const d=modal(t('cd_title'),el('div',{class:'stack'},el('div',{class:'muted sm'},t('ap_ctl_hint')),list),[btn(t('cd_add'),'plus',()=>pickAccount(draw),'pri'),btn(t('close'),'xmark',()=>d.close())],'xl');
+const title=kid?t('cd_title_api',scope.key.name||'API'):scope.sub?t('cd_title_sub'):t('cd_title');
+const d=modal(title,el('div',{class:'stack'},el('div',{class:'muted sm'},t(kid?'ap_cfgs_hint':'sb_cfgs_hint')),el('div',{class:'muted sm'},t('cd_shared')),list),[btn(t('cd_add'),'plus',()=>pickAccount(draw,preset),'pri'),btn(t('close'),'xmark',()=>d.close())],'xl');
 d.addEventListener('close',()=>{if(onClose)onClose()});
 draw();
 api('GET','/api/apicfg').then(s=>{APS.snap=s;draw()}).catch(terr)}
-function pickAccount(done){
+function pickAccount(done,preset){
 const s=APS.snap;
 const q=el('input',{placeholder:t('cd_search'),autocomplete:'off',dir:'ltr'});
 const box=el('div',{class:'stack cfg-pick'});
 const paint=()=>{const f=q.value.trim().toLowerCase();const a=s.accounts.filter(x=>!f||x.name.includes(f));
-box.replaceChildren(...(a.length?a.map(x=>el('button',{type:'button',class:'cfg-pk',onclick:()=>{d.close();cfgForm(x.name,null,done)}},el('b',{class:'ltr'},x.name),el('span',{class:'pill'},x.proto==='ssh'?'SSH · '+x.transport.toUpperCase():x.proto.toUpperCase()+' · '+x.transport.toUpperCase()),x.status!=='active'?pill('off',t('st_'+x.status)):null)):[el('div',{class:'empty'},t('cd_pick_none'))]))};
+box.replaceChildren(...(a.length?a.map(x=>el('button',{type:'button',class:'cfg-pk',onclick:()=>{d.close();cfgForm(x.name,null,done,preset)}},el('b',{class:'ltr'},x.name),el('span',{class:'pill'},x.proto==='ssh'?'SSH · '+x.transport.toUpperCase():x.proto.toUpperCase()+' · '+x.transport.toUpperCase()),x.status!=='active'?pill('off',t('st_'+x.status)):null)):[el('div',{class:'empty'},t('cd_pick_none'))]))};
 q.addEventListener('input',paint);paint();
 const d=modal(t('cd_pick'),el('div',{class:'stack'},s.accounts.length>6?q:null,box),[btn(t('cancel'),'xmark',()=>d.close())])}
 /* ---------- config editor ---------- */
 const GROUPS=['id','conn','ws','payload','net','tls','dns','dnsadv','adv'];
 const COLLAPSED={dnsadv:1,adv:1};
-async function cfgForm(account,cfg,done){
+async function cfgForm(account,cfg,done,preset){
 let F;
 try{F=await api('GET','/api/apicfg/fields/'+account)}catch(e){terr(e);return}
 const s=APS.snap;
-const st={ov:Object.assign({},cfg?cfg.settings:{}),label:cfg?cfg.label:'',delivery:cfg?cfg.delivery:'api',apis:cfg?cfg.apis.slice():[]};
+const st={ov:Object.assign({},cfg?cfg.settings:{}),label:cfg?cfg.label:'',delivery:cfg?cfg.delivery:(preset?preset.delivery:'api'),apis:cfg?cfg.apis.slice():(preset?preset.apis.slice():s.keys.map(k=>k.id))};
 let prof=F.profile;
 const ctl={};          // key -> {box, input, kind}
 const linkBox=el('textarea',{readonly:true,rows:4,dir:'ltr'});
@@ -191,10 +230,10 @@ if(COLLAPSED[g]){secs[g].hidden=true;const tg=el('button',{class:'btn adv-t',typ
 tg.addEventListener('click',()=>{secs[g].hidden=!secs[g].hidden;tg.classList.toggle('on',!secs[g].hidden);tg.setAttribute('aria-expanded',String(!secs[g].hidden))});
 return el('div',{class:'cfg-g'},tg,secs[g])}
 return el('div',{class:'cfg-g'},h,secs[g])};
-const dlSeg=seg(DL_OPTS(),st.delivery,v=>{st.delivery=v;showApis()});
+const dlSeg=seg(DL_OPTS(),st.delivery,v=>{st.delivery=v;if((v==='api'||v==='both')&&!st.apis.length)st.apis=s.keys.map(k=>k.id);showApis()});
 const apiBox=el('div',{class:'f'},el('span',{},t('cd_apis')),el('div',{class:'chips'}),el('small',{class:'muted'},t('cd_apis_hint')));
 const showApis=()=>{
-const on=(st.delivery==='api'||st.delivery==='both')&&s.keys.length>1;
+const on=(st.delivery==='api'||st.delivery==='both')&&s.keys.length>0;
 apiBox.hidden=!on;
 const c=apiBox.querySelector('.chips');
 c.replaceChildren(...s.keys.map(k=>{const sel=st.apis.includes(k.id);return el('button',{type:'button',class:'chip'+(sel?' on':''),onclick:()=>{st.apis=st.apis.includes(k.id)?st.apis.filter(x=>x!==k.id):st.apis.concat(k.id);showApis()}},k.name||'API')}))};

@@ -1,4 +1,4 @@
-"""isile 1.10.2: API links and subscription links.
+"""isile 1.10.5: API links and subscription links.
 
 An API link is  <panel url>/<32 hex hash>  and returns the configs picked for it as JSON (a private VPN app can poll it).
 A subscription link is  <panel url>/<32 hex hash>  per account and returns that account's configs as a base64 list of
@@ -16,6 +16,7 @@ once and a few small hooks (hash lookup, account info, account delete, reset).
 import re,json,time,base64,secrets,hashlib,os
 from urllib.parse import quote
 from flask import request,jsonify,Response
+from werkzeug.security import generate_password_hash,check_password_hash
 
 A=None  # the namespace of app.py (set by setup)
 class _NS:
@@ -31,7 +32,11 @@ ID_RE=re.compile(r"^[0-9a-f]{10}$")
 DELIVERY=("none","api","sub","both")
 STRUCTS=("links","json")
 ENC_KEY_RE=re.compile(r"^[\x21-\x7e]{8,128}$")  # visible ASCII only, so the key is typed the same on every device
+PW_RE=re.compile(r"^[\x21-\x7e]{4,64}$")  # API password: visible ASCII only (it travels in an HTTP header)
 MISS={}  # ip -> [misses, last]: unknown hashes are throttled
+PWF={}  # (api id, ip) -> [wrong passwords, last]: password guesses are throttled
+PW_TRIES=8
+PW_WINDOW=600
 TLSV=["Auto","TLSv1.0","TLSv1.1","TLSv1.2","TLSv1.3"]
 FPS=["chrome","firefox","safari","ios","android","edge","360","qq","random","randomized",""]
 NETS=["ws","grpc","xhttp","httpupgrade","tcp"]
@@ -108,6 +113,19 @@ CREATE TABLE IF NOT EXISTS api_subs(account TEXT PRIMARY KEY,token TEXT NOT NULL
             c.execute("ALTER TABLE api_keys ADD COLUMN enc_on INTEGER NOT NULL DEFAULT 0")
         if "enc_key" not in cols:
             c.execute("ALTER TABLE api_keys ADD COLUMN enc_key TEXT NOT NULL DEFAULT ''")
+        if "pw_on" not in cols:
+            # 1.10.5: per-API password, and configs are scoped to the API links that name them ("no API named" no longer means "every API").
+            # Existing configs that used to mean "every API" now name every API that exists at this moment.
+            c.execute("ALTER TABLE api_keys ADD COLUMN pw_on INTEGER NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE api_keys ADD COLUMN pw_hash TEXT NOT NULL DEFAULT ''")
+            ids=[r[0] for r in c.execute("SELECT id FROM api_keys ORDER BY created,rowid")]
+            for row in c.execute("SELECT id,apis,delivery FROM api_configs WHERE delivery IN ('api','both')").fetchall():
+                try:
+                    cur=json.loads(row["apis"])
+                except ValueError:
+                    cur=[]
+                if not cur:
+                    c.execute("UPDATE api_configs SET apis=? WHERE id=?",(json.dumps(ids),row["id"]))
         for row in c.execute("SELECT id,settings FROM api_configs WHERE settings LIKE '%locked%'").fetchall():
             try:
                 ov=json.loads(row["settings"])
@@ -404,6 +422,40 @@ def _miss(ip):
         MISS.pop(k,None)
     m=MISS.get(ip,[0,now])
     MISS[ip]=[m[0]+1,now]
+def _json(obj,code=200):
+    resp=Response(json.dumps(obj,separators=(",",":")),code,mimetype="application/json")
+    resp.headers["Cache-Control"]="no-store"
+    return resp
+def _pw_gate(k,ip):
+    """Password of an API link. Without the right password in the X-Api-Password header the link sends nothing but a
+    "password required" answer: no configs, no counters, no hint about what the link holds. Returns None when the request may continue."""
+    if not k["pw_on"]:
+        return None
+    now=time.time()
+    for key in [x for x,v in PWF.items() if now-v[1]>PW_WINDOW]:
+        PWF.pop(key,None)
+    key=(k["id"],ip)
+    f=PWF.get(key)
+    if f and f[0]>=PW_TRIES:
+        return _json({"password_required":True,"error":"too_many"},429)
+    given=request.headers.get("X-Api-Password","")
+    if not given:
+        # 403 and not 401: without a WWW-Authenticate header Android's HttpURLConnection throws on a 401; the JSON body says what is needed
+        return _json({"password_required":True},403)
+    ok=False
+    if len(given)<=128 and k["pw_hash"]:
+        try:
+            ok=check_password_hash(k["pw_hash"],given)
+        except Exception:
+            ok=False
+    if ok:
+        PWF.pop(key,None)
+        return None
+    if len(PWF)>5000:
+        PWF.clear()
+    PWF[key]=[(f[0] if f else 0)+1,now]
+    A.audit("api-password-wrong",k["name"])
+    return _json({"password_required":True,"bad_password":True},403)
 def handle(h):
     """Called by app.py for GET /<h>. Returns a Response for an API or subscription hash, None when h is not one."""
     h=(h or "").lower()
@@ -418,6 +470,9 @@ def handle(h):
     try:
         k=c.execute("SELECT * FROM api_keys WHERE token=?",(h,)).fetchone()
         if k and k["enabled"] and api_on():
+            gate=_pw_gate(k,ip)
+            if gate is not None:
+                return gate
             struct="json" if k["structure"]=="json" else "links"
             rows=[]
             for row in _cfg_rows(c,"WHERE delivery IN ('api','both')"):
@@ -425,7 +480,7 @@ def handle(h):
                     ids=json.loads(row["apis"])
                 except ValueError:
                     ids=[]
-                if ids and k["id"] not in ids:
+                if k["id"] not in ids:
                     continue
                 r=_acct(c,row["account"])
                 if not r or not eligible(r) or A.calc(r,now)!="active":
@@ -520,9 +575,9 @@ def _key_json(c,k):
             ids=json.loads(row["apis"])
         except ValueError:
             ids=[]
-        if not ids or k["id"] in ids:
+        if k["id"] in ids:
             n+=1
-    return {"id":k["id"],"name":k["name"],"enabled":bool(k["enabled"]),"url":A.page_url(k["token"]),"created":k["created"],"last":k["last"],"hits":k["hits"],"configs":n,"structure":"json" if k["structure"]=="json" else "links","enc_on":bool(k["enc_on"]),"enc_key":k["enc_key"] or ""}
+    return {"id":k["id"],"name":k["name"],"enabled":bool(k["enabled"]),"url":A.page_url(k["token"]),"created":k["created"],"last":k["last"],"hits":k["hits"],"configs":n,"structure":"json" if k["structure"]=="json" else "links","enc_on":bool(k["enc_on"]),"enc_key":k["enc_key"] or "","pw_on":bool(k["pw_on"]),"pw_set":bool(k["pw_hash"])}
 def _cfg_json(c,row,r):
     try:
         ov=json.loads(row["settings"])
@@ -560,7 +615,15 @@ def admin_settings():
             on=bool(d["api_on"])
             A.put("api_on","1" if on else "0")
             if on and not c.execute("SELECT 1 FROM api_keys").fetchone():
-                c.execute("INSERT INTO api_keys(id,name,token,enabled,created) VALUES(?,?,?,1,?)",(new_id(),"API 1",new_hash(),int(time.time())))
+                kid=new_id()
+                c.execute("INSERT INTO api_keys(id,name,token,enabled,created) VALUES(?,?,?,1,?)",(kid,"API 1",new_hash(),int(time.time())))
+                for row in _cfg_rows(c,"WHERE delivery IN ('api','both')"):
+                    try:
+                        cur=json.loads(row["apis"])
+                    except ValueError:
+                        cur=[]
+                    if not cur:
+                        c.execute("UPDATE api_configs SET apis=? WHERE id=?",(json.dumps([kid]),row["id"]))
                 c.commit()
         if "sub_on" in d:
             A.put("sub_on","1" if d["sub_on"] else "0")
@@ -600,11 +663,25 @@ def key_edit(kid):
         on=bool(d["enc_on"]) if "enc_on" in d else bool(k["enc_on"])
         if on and not ek:
             return A.err("api_bad_enc_key")
+        pw=str(d["password"] or "").strip() if "password" in d else ""
+        if pw and not PW_RE.fullmatch(pw):
+            return A.err("api_bad_password")
+        pw_on=bool(d["pw_on"]) if "pw_on" in d else bool(k["pw_on"])
+        if pw_on and not pw and not k["pw_hash"]:
+            return A.err("api_bad_password")
         if "structure" in d:
             c.execute("UPDATE api_keys SET structure=? WHERE id=?",(d["structure"],kid))
         if "enc_key" in d or "enc_on" in d:
             c.execute("UPDATE api_keys SET enc_on=?,enc_key=? WHERE id=?",(1 if on else 0,ek,kid))
             A.audit("api-key-encryption","%s on=%s"%(k["name"],on))
+        if pw:
+            c.execute("UPDATE api_keys SET pw_hash=? WHERE id=?",(generate_password_hash(pw),kid))
+            for x in [x for x in PWF if x[0]==kid]:
+                PWF.pop(x,None)
+            A.audit("api-key-password","%s set"%k["name"])
+        if "pw_on" in d or pw:
+            c.execute("UPDATE api_keys SET pw_on=? WHERE id=?",(1 if pw_on else 0,kid))
+            A.audit("api-key-password","%s on=%s"%(k["name"],pw_on))
         if "name" in d:
             c.execute("UPDATE api_keys SET name=? WHERE id=?",(str(d["name"]).strip()[:40],kid))
         if "enabled" in d:
@@ -679,6 +756,9 @@ def _cfg_body(c,d,r):
         return None,A.err("bad_values")
     have={k["id"] for k in c.execute("SELECT id FROM api_keys")}
     ids=[i for i in ids if i in have]
+    if not ids and delivery in ("api","both"):
+        # since 1.10.5 a config reaches only the API links that name it
+        delivery="sub" if delivery=="both" else "none"
     return (ov,delivery,ids),None
 def cfg_new():
     d=request.get_json(silent=True) or {}
