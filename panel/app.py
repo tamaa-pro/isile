@@ -2926,7 +2926,7 @@ def hwid_bad(ip):
     b[0]+=1
 @app.route("/api/hwid",methods=["GET","POST"])
 def hwid_beat():
-    """Device beacon of the owner's own app: u=account name, h=device id, and either k=account secret or sig+ts
+    """Device beacon of the owner's own app: u=account name (optional for V2Ray, found from k), h=device id, and either k=account secret or sig+ts
     (sig = hex HMAC-SHA256 keyed by the secret over "u|h|ts", ts = unix seconds); bye=1 reports a disconnect."""
     ip=client_ip()
     if hwid_limited(ip):
@@ -2935,12 +2935,18 @@ def hwid_beat():
     d=d if isinstance(d,dict) else {}
     g=lambda k:str(d.get(k) if d.get(k) is not None else request.values.get(k,"")).strip()
     u,h=g("u"),g("h")
-    if not RE_UNAME.fullmatch(u) or not HW_RE.fullmatch(h):
+    if (u and not RE_UNAME.fullmatch(u)) or not HW_RE.fullmatch(h):
         hwid_bad(ip)
         return err("bad_request",400)
     c=db()
     try:
-        r=c.execute("SELECT proto,secret,status,transport FROM accounts WHERE name=?",(u,)).fetchone()
+        if u:
+            r=c.execute("SELECT name,proto,secret,status,transport FROM accounts WHERE name=?",(u,)).fetchone()
+        else:
+            # V2Ray apps do not know the account name: the UUID / password identifies it (k only, no signature)
+            rs=c.execute("SELECT name,proto,secret,status,transport FROM accounts WHERE secret=? AND proto IN ('vless','vmess','trojan')",(g("k"),)).fetchall() if g("k") else []
+            r=rs[0] if len(rs)==1 else None
+            u=r["name"] if r else ""
     finally:
         c.close()
     ok=False
